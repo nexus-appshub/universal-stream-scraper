@@ -18,9 +18,6 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
       return isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`;
     case 'vidsrc_me':
       return isTv ? `https://vidsrc.me/embed/tv?tmdb=${id}&sea=${s}&epi=${e}` : `https://vidsrc.me/embed/movie?tmdb=${id}`;
-    case 'vidsrc_in':
-    case 'vixsrc':
-      return isTv ? `https://vidsrc.in/embed/tv/${id}/${s}/${e}` : `https://vidsrc.in/embed/movie/${id}`;
     case 'autoembed':
       return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`;
     case 'videasy':
@@ -28,7 +25,8 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
     case 'cinesu':
       return isTv ? `https://cinesrc.stream/embed/tv/${id}/${s}/${e}` : `https://cinesrc.stream/embed/movie/${id}`;
     case 'moviebox':
-      return `https://themoviebox.xyz/movies/${id}`;
+      // TheMovieBox সরাসরি পুরো পাথ বা আইডি দুইভাবেই হ্যান্ডেল করা
+      return id.startsWith('http') ? id : `https://themoviebox.xyz/movies/${id}`;
     case 'anikoto':
       return `https://anikoto.fun/watch/${id}-episode-${e}`;
     default:
@@ -75,13 +73,13 @@ app.get('/api/stream-proxy', async (req, res) => {
 
 // ডিপ স্ক্র্যাপার এন্ডপয়েন্ট
 app.get('/api/get-stream', async (req, res) => {
-  const { provider = 'vidnest', id, s = 1, e = 1, type = 'movie' } = req.query;
+  const { provider = 'vidnest', id, s = 1, e = 1, type = 'movie', url: directUrl } = req.query;
 
-  if (!id) {
-    return res.status(400).json({ success: false, error: 'Media ID is required' });
+  if (!id && !directUrl) {
+    return res.status(400).json({ success: false, error: 'Media ID or direct URL is required' });
   }
 
-  const targetUrl = resolveProviderUrl(provider, id, s, e, type);
+  const targetUrl = directUrl ? decodeURIComponent(directUrl) : resolveProviderUrl(provider, id, s, e, type);
   let browser = null;
 
   try {
@@ -94,13 +92,12 @@ app.get('/api/get-stream', async (req, res) => {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,720'
+        '--window-size=1366,768'
       ]
     });
 
     const page = await browser.newPage();
     
-    // বট ডিটেকশন শিল্ড
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
@@ -111,31 +108,37 @@ app.get('/api/get-stream', async (req, res) => {
 
     let streamUrl = null;
 
-    // সব ফ্রেম ও আইফ্রেমের নেটওয়ার্ক রেসপন্স ইন্টারসেপ্ট করা
+    // ট্র্যাফিক থেকে .m3u8, .ts ও HLS সোর্স ইন্টারসেপ্ট করা
     page.on('response', async (response) => {
-      const url = response.url();
+      const u = response.url();
       if (
-        (url.includes('.m3u8') || url.includes('/hls/') || url.includes('master.m3u8') || (url.includes('.mp4') && !url.includes('google'))) &&
-        !url.includes('analytics') &&
-        !url.includes('doubleclick')
+        (u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8') || u.includes('hakunaymatata')) &&
+        !u.includes('analytics') &&
+        !u.includes('doubleclick')
       ) {
-        streamUrl = url;
+        if (u.includes('.ts')) {
+          // সেগমেন্ট পেলে মাস্টার প্লেলিস্ট পাথ তৈরি
+          const base = u.substring(0, u.lastIndexOf('/'));
+          streamUrl = `${base}/index.m3u8`;
+        } else {
+          streamUrl = u;
+        }
       }
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 15000 });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     } catch (navErr) {}
 
-    // আইফ্রেমের ভেতরের প্লেয়ার বাটন ট্রিগার করা
+    // প্লেয়ার ক্লিক ট্রিগার
     try {
+      await new Promise(r => setTimeout(r, 2000));
       await page.evaluate(() => {
-        const elements = document.querySelectorAll('button, video, .play, .jw-preview, iframe');
-        elements.forEach(el => el.click && el.click());
+        const els = document.querySelectorAll('.art-video-player, video, button, .play-btn, .art-state, div[class*="play"]');
+        els.forEach(el => el.click && el.click());
       });
     } catch (e) {}
 
-    // স্ট্রিম পাওয়ার জন্য সর্বোচ্চ ১০ সেকেন্ড অপেক্ষা
     let waitTime = 0;
     while (!streamUrl && waitTime < 10000) {
       await new Promise(r => setTimeout(r, 500));
