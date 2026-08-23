@@ -25,7 +25,6 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
     case 'cinesu':
       return isTv ? `https://cinesrc.stream/embed/tv/${id}/${s}/${e}` : `https://cinesrc.stream/embed/movie/${id}`;
     case 'moviebox':
-      // TheMovieBox সরাসরি পুরো পাথ বা আইডি দুইভাবেই হ্যান্ডেল করা
       return id.startsWith('http') ? id : `https://themoviebox.xyz/movies/${id}`;
     case 'anikoto':
       return `https://anikoto.fun/watch/${id}-episode-${e}`;
@@ -108,21 +107,16 @@ app.get('/api/get-stream', async (req, res) => {
 
     let streamUrl = null;
 
-    // ট্র্যাফিক থেকে .m3u8, .ts ও HLS সোর্স ইন্টারসেপ্ট করা
+    // ট্র্যাফিক ফিল্টারিং (GitHub কনফিগ ও অ্যানালিটিক্স বাদ দিয়ে আসল ভিডিও সিডিএন ধরা)
     page.on('response', async (response) => {
       const u = response.url();
       if (
-        (u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8') || u.includes('hakunaymatata')) &&
+        (u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8')) &&
+        !u.includes('githubusercontent.com') && // গিটহাব ফাইল ইগনোর
         !u.includes('analytics') &&
         !u.includes('doubleclick')
       ) {
-        if (u.includes('.ts')) {
-          // সেগমেন্ট পেলে মাস্টার প্লেলিস্ট পাথ তৈরি
-          const base = u.substring(0, u.lastIndexOf('/'));
-          streamUrl = `${base}/index.m3u8`;
-        } else {
-          streamUrl = u;
-        }
+        streamUrl = u;
       }
     });
 
@@ -130,17 +124,17 @@ app.get('/api/get-stream', async (req, res) => {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     } catch (navErr) {}
 
-    // প্লেয়ার ক্লিক ট্রিগার
+    // প্লেয়ার বাটনে ক্লিক যাতে আসল ভিডিও লোড শুরু হয়
     try {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1500));
       await page.evaluate(() => {
-        const els = document.querySelectorAll('.art-video-player, video, button, .play-btn, .art-state, div[class*="play"]');
+        const els = document.querySelectorAll('.art-video-player, video, button, .play-btn, .jw-preview, iframe');
         els.forEach(el => el.click && el.click());
       });
     } catch (e) {}
 
     let waitTime = 0;
-    while (!streamUrl && waitTime < 10000) {
+    while (!streamUrl && waitTime < 9000) {
       await new Promise(r => setTimeout(r, 500));
       waitTime += 500;
     }
@@ -150,12 +144,11 @@ app.get('/api/get-stream', async (req, res) => {
     if (streamUrl) {
       return res.json({
         success: true,
-        provider,
         streamUrl,
         proxyStreamUrl: `/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`
       });
     } else {
-      return res.status(404).json({ success: false, error: `Could not capture stream for ${provider}` });
+      return res.status(404).json({ success: false, error: 'Could not capture media stream.' });
     }
 
   } catch (error) {
