@@ -16,10 +16,14 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
     case 'vidsrc':
     case 'vidsrc_to':
       return isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`;
+    case 'vidsrc_me':
+      return isTv ? `https://vidsrc.me/embed/tv?tmdb=${id}&sea=${s}&epi=${e}` : `https://vidsrc.me/embed/movie?tmdb=${id}`;
     case 'autoembed':
       return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`;
     case 'videasy':
       return isTv ? `https://player.videasy.net/tv/${id}/${s}/${e}` : `https://player.videasy.net/movie/${id}`;
+    case 'cinesu':
+      return isTv ? `https://cinesrc.stream/embed/tv/${id}/${s}/${e}` : `https://cinesrc.stream/embed/movie/${id}`;
     case 'moviebox':
       return id.startsWith('http') ? id : `https://themoviebox.xyz/movies/${id}`;
     case 'anikoto':
@@ -109,7 +113,11 @@ app.get('/api/get-stream', async (req, res) => {
     page.on('response', async (response) => {
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8') || (u.includes('.mp4') && !u.includes('google'));
-      const isBlacklisted = u.includes('githubusercontent.com') || u.includes('analytics') || u.includes('doubleclick') || u.includes('clarity.ms');
+      const isBlacklisted = u.includes('githubusercontent.com') || 
+                            u.includes('analytics') || 
+                            u.includes('doubleclick') || 
+                            u.includes('demo-video.mp4') || 
+                            u.includes('clarity.ms');
 
       if (isMedia && !isBlacklisted) {
         streamUrl = u;
@@ -146,12 +154,14 @@ app.get('/api/get-stream', async (req, res) => {
     if (streamUrl) {
       return res.json({
         success: true,
+        provider,
         streamUrl,
         proxyStreamUrl: `/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`
       });
     } else {
       return res.status(404).json({
         success: false,
+        provider,
         error: 'Target uses secured stream token. Recommend using direct iframe fallback.',
         embedUrl: targetUrl
       });
