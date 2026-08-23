@@ -16,14 +16,10 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
     case 'vidsrc':
     case 'vidsrc_to':
       return isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`;
-    case 'vidsrc_me':
-      return isTv ? `https://vidsrc.me/embed/tv?tmdb=${id}&sea=${s}&epi=${e}` : `https://vidsrc.me/embed/movie?tmdb=${id}`;
     case 'autoembed':
       return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`;
     case 'videasy':
       return isTv ? `https://player.videasy.net/tv/${id}/${s}/${e}` : `https://player.videasy.net/movie/${id}`;
-    case 'cinesu':
-      return isTv ? `https://cinesrc.stream/embed/tv/${id}/${s}/${e}` : `https://cinesrc.stream/embed/movie/${id}`;
     case 'moviebox':
       return id.startsWith('http') ? id : `https://themoviebox.xyz/movies/${id}`;
     case 'anikoto':
@@ -34,7 +30,7 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
 }
 
 app.get('/', (req, res) => {
-  res.send('Universal Stream Scraper Engine Running');
+  res.send('⚡ Universal Stream Scraper Engine Running');
 });
 
 // সুরক্ষিত সিডিএন বাইপাস প্রক্সি
@@ -91,14 +87,16 @@ app.get('/api/get-stream', async (req, res) => {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1366,768'
+        '--window-size=1920,1080'
       ]
     });
 
     const page = await browser.newPage();
     
+    // বট শিল্ড বাইপাস
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      window.chrome = { runtime: {} };
     });
 
     await page.setUserAgent(
@@ -107,15 +105,13 @@ app.get('/api/get-stream', async (req, res) => {
 
     let streamUrl = null;
 
-    // ট্র্যাফিক ফিল্টারিং (GitHub কনফিগ ও অ্যানালিটিক্স বাদ দিয়ে আসল ভিডিও সিডিএন ধরা)
+    // সব ফ্রেম ও নেটওয়ার্ক রিকোয়েস্ট ইন্টারসেপ্ট
     page.on('response', async (response) => {
       const u = response.url();
-      if (
-        (u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8')) &&
-        !u.includes('githubusercontent.com') && // গিটহাব ফাইল ইগনোর
-        !u.includes('analytics') &&
-        !u.includes('doubleclick')
-      ) {
+      const isMedia = u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8') || (u.includes('.mp4') && !u.includes('google'));
+      const isBlacklisted = u.includes('githubusercontent.com') || u.includes('analytics') || u.includes('doubleclick') || u.includes('clarity.ms');
+
+      if (isMedia && !isBlacklisted) {
         streamUrl = u;
       }
     });
@@ -124,17 +120,23 @@ app.get('/api/get-stream', async (req, res) => {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     } catch (navErr) {}
 
-    // প্লেয়ার বাটনে ক্লিক যাতে আসল ভিডিও লোড শুরু হয়
+    // ১. মেইন পেজ ও আইফ্রেমগুলোতে ডিপ ক্লিক পাঠানো
+    await new Promise(r => setTimeout(r, 2000));
     try {
-      await new Promise(r => setTimeout(r, 1500));
-      await page.evaluate(() => {
-        const els = document.querySelectorAll('.art-video-player, video, button, .play-btn, .jw-preview, iframe');
-        els.forEach(el => el.click && el.click());
-      });
+      const frames = page.frames();
+      for (const frame of frames) {
+        try {
+          await frame.evaluate(() => {
+            const clickable = document.querySelectorAll('video, button, #play, .play-btn, .art-video-player, .jw-preview, div[class*="play"]');
+            clickable.forEach(el => el.click && el.click());
+          });
+        } catch (fe) {}
+      }
     } catch (e) {}
 
+    // ২. স্ট্রিম ক্যাচ করার জন্য পোলিং
     let waitTime = 0;
-    while (!streamUrl && waitTime < 9000) {
+    while (!streamUrl && waitTime < 12000) {
       await new Promise(r => setTimeout(r, 500));
       waitTime += 500;
     }
@@ -148,7 +150,11 @@ app.get('/api/get-stream', async (req, res) => {
         proxyStreamUrl: `/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`
       });
     } else {
-      return res.status(404).json({ success: false, error: 'Could not capture media stream.' });
+      return res.status(404).json({
+        success: false,
+        error: 'Target uses secured stream token. Recommend using direct iframe fallback.',
+        embedUrl: targetUrl
+      });
     }
 
   } catch (error) {
@@ -158,4 +164,4 @@ app.get('/api/get-stream', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Universal Scraper online on port ${PORT}`));
+app.listen(PORT, () => console.log(`Scraper running on port ${PORT}`));
