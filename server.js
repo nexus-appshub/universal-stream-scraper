@@ -1,171 +1,117 @@
 const express = require('express');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const cors = require('cors');
 const axios = require('axios');
-
-puppeteer.use(StealthPlugin());
+const cors = require('cors');
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
-function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
-  const isTv = type === 'tv';
-  switch (provider.toLowerCase()) {
-    case 'vidnest':
-      return isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`;
-    case 'vidrock':
-      return isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`;
-    case 'vidsrc':
-    case 'vidsrc_to':
-      return isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`;
-    case 'vidsrc_me':
-      return isTv ? `https://vidsrc.me/embed/tv?tmdb=${id}&sea=${s}&epi=${e}` : `https://vidsrc.me/embed/movie?tmdb=${id}`;
-    case 'autoembed':
-      return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`;
-    case 'videasy':
-      return isTv ? `https://player.videasy.net/tv/${id}/${s}/${e}` : `https://player.videasy.net/movie/${id}`;
-    default:
-      return isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`;
+// MovieBox হেডার কনফিগারেশন
+const HEADERS = {
+  'User-Agent': 'com.community.mbox.tv/50040011 (Linux; U; Android 9; en_US; 23078RKD5C; Build/PQ3B.190801.07131748; Cronet/151.0.7922.47)',
+  'X-Client-Status': '1',
+  'X-Play-Mode': 'stream'
+};
+
+// মেমোরিতে টোকেন ক্যাশ রাখা
+let cachedToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjYwNDk1NjQ5MTA2NjkyMzIsImV4cCI6MTc5NTM1ODUwMn0.ZKkU5-K-Hw63EHFcgUQ';
+
+// ১. অটোমেটিক গেস্ট টোকেন জেনারেটর ফাংশন
+async function getFreshToken() {
+  try {
+    const res = await axios.post('https://tv.aoneroom.com/wefeed-tv-bff/user/visitor-login', {}, {
+      headers: HEADERS,
+      timeout: 5000
+    });
+    if (res.data?.data?.token) {
+      cachedToken = res.data.data.token;
+    }
+  } catch (err) {
+    console.log('Using fallback auth token');
   }
+  return cachedToken;
 }
 
-app.get('/', (req, res) => {
-  res.send('⚡ Stealth Scraper Engine Online');
+// ২. মেইন এপিআই এন্ডপয়েন্ট: মুভির ফ্রেশ স্ট্রিম ডেটা আনা
+app.get('/api/moviebox', async (req, res) => {
+  const { subjectId, se = 0, ep = 0 } = req.query;
+
+  if (!subjectId) {
+    return res.status(400).json({ success: false, error: 'subjectId param missing' });
+  }
+
+  try {
+    const token = await getFreshToken();
+
+    const response = await axios.get('https://tv.aoneroom.com/wefeed-tv-bff/subject/play-info', {
+      params: { subjectId, se, ep },
+      headers: {
+        ...HEADERS,
+        'Authorization': `Bearer ${token}`
+      },
+      timeout: 8000
+    });
+
+    const data = response.data?.data;
+    if (!data) {
+      return res.status(404).json({ success: false, message: 'No media streams found' });
+    }
+
+    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    const mp4Url = data.resources?.[0]?.url;
+    const dashStream = data.streams?.[0];
+
+    // ফ্রন্টএন্ড প্লেয়ারের জন্য রেডি রেসপন্স
+    res.json({
+      success: true,
+      title: data.title,
+      // আমাদের সার্ভার দিয়ে প্রক্সি করা লিংক (যা সরাসরি প্লে হবে)
+      streamUrl: `${hostUrl}/api/stream?url=${encodeURIComponent(dashStream ? dashStream.url : mp4Url)}&cookie=${encodeURIComponent(dashStream?.signCookie || '')}`,
+      rawDirectMp4: mp4Url,
+      dashManifest: dashStream?.url || null
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-// CDN প্রক্সি পাইপ
-app.get('/api/stream-proxy', async (req, res) => {
-  const { url, referer } = req.query;
-  if (!url) return res.status(400).send('URL is required');
+// ৩. লাইভ ভিডিও পাইপ প্রক্সি (CloudFront Cookie & CORS হ্যান্ডলার)
+app.get('/api/stream', async (req, res) => {
+  const { url, cookie } = req.query;
+  if (!url) return res.status(400).send('Stream URL missing');
 
   try {
     const target = decodeURIComponent(url);
-    const domain = new URL(target).origin;
-    const ref = referer ? decodeURIComponent(referer) : domain;
+    const signCookie = cookie ? decodeURIComponent(cookie) : '';
 
-    const response = await axios({
+    const streamResponse = await axios({
       method: 'GET',
       url: target,
       responseType: 'stream',
       headers: {
-        'Referer': ref,
-        'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-      },
-      timeout: 15000
+        'Cookie': signCookie,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
     });
 
+    // সঠিক ভিডিও হেডার রিটার্ন করা
     res.set({
-      'Content-Type': response.headers['content-type'] || 'application/vnd.apple.mpegurl',
-      'Access-Control-Allow-Origin': '*'
+      'Content-Type': streamResponse.headers['content-type'] || 'video/mp4',
+      'Access-Control-Allow-Origin': '*',
+      'Accept-Ranges': 'bytes'
     });
 
-    response.data.pipe(res);
-  } catch (error) {
-    res.status(500).json({ error: 'CDN Proxy Pipe Failed', message: error.message });
+    streamResponse.data.pipe(res);
+  } catch (err) {
+    res.status(500).send('Stream relay error');
   }
 });
 
-// মেইন স্ক্র্যাপার
-app.get('/api/get-stream', async (req, res) => {
-  const { provider = 'vidnest', id, s = 1, e = 1, type = 'movie', url: directUrl } = req.query;
-
-  if (!id && !directUrl) {
-    return res.status(400).json({ success: false, error: 'Media ID or direct URL is required' });
-  }
-
-  const targetUrl = directUrl ? decodeURIComponent(directUrl) : resolveProviderUrl(provider, id, s, e, type);
-  let browser = null;
-
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-web-security',
-        '--window-size=1920,1080'
-      ]
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    );
-
-    let streamUrl = null;
-
-    // ১. রেসপন্স লিসেনার
-    page.on('response', async (response) => {
-      const u = response.url();
-      const isMedia = u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8') || (u.includes('.mp4') && !u.includes('google'));
-      const isBlacklisted = u.includes('githubusercontent.com') || u.includes('analytics') || u.includes('doubleclick') || u.includes('demo-video.mp4');
-
-      if (isMedia && !isBlacklisted) {
-        streamUrl = u;
-      }
-    });
-
-    // ২. পেজ নেভিগেশন
-    try {
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-    } catch (e) {}
-
-    // ৩. রিয়েল মাউস ক্লিক ও প্লেয়ার অ্যাক্টিভেশন
-    try {
-      const frames = page.frames();
-      for (const frame of frames) {
-        try {
-          const domSource = await frame.evaluate(() => {
-            const v = document.querySelector('video');
-            return v ? v.src : null;
-          });
-          if (domSource && domSource.startsWith('http') && !domSource.includes('demo-video.mp4')) {
-            streamUrl = domSource;
-            break;
-          }
-          await frame.evaluate(() => {
-            const els = document.querySelectorAll('video, button, #play, .play-btn, .art-video-player');
-            els.forEach(el => el.click && el.click());
-          });
-        } catch (fe) {}
-      }
-    } catch (e) {}
-
-    // ৪. স্ট্রিমিং ইউআরএল ইন্টারসেপ্ট ওয়েট লুপ
-    let waitTime = 0;
-    while (!streamUrl && waitTime < 10000) {
-      await new Promise(r => setTimeout(r, 500));
-      waitTime += 500;
-    }
-
-    await browser.close();
-
-    if (streamUrl) {
-      return res.json({
-        success: true,
-        provider,
-        streamUrl,
-        proxyStreamUrl: `/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`
-      });
-    } else {
-      return res.status(404).json({
-        success: false,
-        provider,
-        error: 'Target uses secured stream token. Recommend using direct iframe fallback.',
-        embedUrl: targetUrl
-      });
-    }
-
-  } catch (error) {
-    if (browser) await browser.close();
-    return res.status(500).json({ success: false, error: error.message });
-  }
+// হেলথ চেক রুট
+app.get('/', (req, res) => {
+  res.send('🎬 MovieBox API Server is Live & Running!');
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Stealth Scraper running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
