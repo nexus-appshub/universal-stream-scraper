@@ -12,7 +12,6 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
-// পূর্ণাঙ্গ উন্মুক্ত CORS কনফিগারেশন
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -23,9 +22,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// ==========================================
-// 1. মেমোরি ক্যাশিং ও ব্রাউজার পুল
-// ==========================================
 const streamCache = new Map();
 const CACHE_TTL = 3 * 60 * 60 * 1000;
 let globalBrowser = null;
@@ -55,43 +51,63 @@ async function getWarmBrowser() {
 getWarmBrowser().catch(() => {});
 
 // ==========================================
-// 2. মাল্টি-সোর্স প্রোভাইডার ইউআরএল জেনারেটর (VidSrc + Anikoto)
+// ১. ANIKOTO NATIVE REST API (0.2s FASTEST FOR ANIME)
+// ==========================================
+async function getAnikotoApiStream(animeId, epNumber = 1, lang = 'sub') {
+  try {
+    const res = await axios.get(`https://anikotoapi.site/series/${animeId}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      timeout: 5000
+    });
+
+    const episodes = res.data?.episodes || res.data?.data?.episodes;
+    if (episodes && episodes.length > 0) {
+      const targetEp = episodes.find(e => Number(e.number) === Number(epNumber)) || episodes[epNumber - 1] || episodes[0];
+      const embedId = targetEp?.episode_embed_id || targetEp?.id;
+      if (embedId) {
+        return `https://megaplay.buzz/stream/s-2/${embedId}/${lang}`;
+      }
+    }
+  } catch (err) {}
+  return null;
+}
+
+// ==========================================
+// ২. URL PROVIDERS GENERATOR
 // ==========================================
 function getWebProviderUrls(params) {
-  const { id, isTv, isAnime, season, episode, lang, anilistId, malId } = params;
+  const { id, isTv, isAnime, season, episode, lang, malId, anilistId } = params;
 
-  // অ্যানিমে স্ক্র্যাপিং (Anikoto MegaPlay Engine)
   if (isAnime) {
-    const urls = [];
-    if (malId) urls.push(`https://megaplay.buzz/stream/mal/${malId}/${episode}/${lang}`); //
-    if (anilistId) urls.push(`https://megaplay.buzz/stream/ani/${anilistId}/${episode}/${lang}`); //
-    urls.push(`https://megaplay.buzz/stream/s-2/${id}/${lang}`); //
-    return urls;
+    const list = [];
+    if (malId) list.push(`https://megaplay.buzz/stream/mal/${malId}/${episode}/${lang}`);
+    if (anilistId) list.push(`https://megaplay.buzz/stream/ani/${anilistId}/${episode}/${lang}`);
+    list.push(`https://megaplay.buzz/stream/s-2/${id}/${lang}`);
+    list.push(`https://vidsrc.sbs/embed/movie/${id}`);
+    return list;
   }
 
-  // টিভি সিরিজ স্ক্র্যাপিং (VidSrc.sbs, AutoEmbed, Vidnest, Vidrock)
   if (isTv) {
     return [
-      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
-      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`
+      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
+      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
+      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
     ];
   }
 
-  // মুভি স্ক্র্যাপিং
   return [
-    `https://vidsrc.sbs/embed/movie/${id}`,
-    `https://player.autoembed.cc/embed/movie/${id}`,
     `https://vidnest.fun/movie/${id}`,
+    `https://player.autoembed.cc/embed/movie/${id}`,
+    `https://vidsrc.sbs/embed/movie/${id}`,
     `https://vidrock.net/embed/movie/${id}`,
     `https://vidsrc.xyz/embed/movie?tmdb=${id}`
   ];
 }
 
 // ==========================================
-// 3. ফাস্ট স্ক্র্যাপার ইঞ্জিন
+// ৩. PUPPETEER SCRAPER ENGINE (DEMO FILTER ADDED)
 // ==========================================
 async function fastScrape(browser, targetUrl) {
   const page = await browser.newPage();
@@ -115,7 +131,11 @@ async function fastScrape(browser, targetUrl) {
     page.on('response', async (response) => {
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
-      if (isMedia && !resolved) {
+      
+      // ডেমো বা ট্র্যাকার ভিডিও ফিল্টার করা
+      const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
+
+      if (isMedia && !isFake && !resolved) {
         resolved = true;
         await page.close().catch(() => {});
         resolve(u);
@@ -125,11 +145,19 @@ async function fastScrape(browser, targetUrl) {
     try {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 9000 });
       
-      // অটোপ্লে এবং প্লে বাটন ক্লিক
+      // আইফ্রেম ও প্লে বাটন ক্লিক সিমুলেট করা
       await page.evaluate(() => {
-        const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container');
+        const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, #iframe-embed');
         if (btn) btn.click();
       });
+
+      const frames = page.frames();
+      for (const frame of frames) {
+        await frame.evaluate(() => {
+          const b = document.querySelector('video, button, #play, .play-btn');
+          if (b) b.click();
+        }).catch(() => {});
+      }
     } catch (e) {}
 
     setTimeout(async () => {
@@ -138,19 +166,18 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 5500);
+    }, 6000);
   });
 }
 
-// কুয়েরি প্যারামিটার নরমালাইজার
 function parseParams(query) {
-  const targetId = query.id || query.subjectId || query.tmdbId || '27205';
+  const targetId = query.id || query.subjectId || query.tmdbId || '20';
   const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
   const isAnime = typeStr === 'anime';
   const isTv = typeStr === 'tv' || typeStr === 'series' || typeStr === 'show';
   const season = parseInt(query.s || query.season || query.se || 1);
   const episode = parseInt(query.e || query.episode || query.ep || 1);
-  const lang = (query.lang || query.dub === 'true' ? 'dub' : 'sub').toLowerCase();
+  const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
   const malId = query.mal_id || query.malId;
   const anilistId = query.anilist_id || query.anilistId;
 
@@ -158,11 +185,11 @@ function parseParams(query) {
 }
 
 // ==========================================
-// 4. JSON রেজলভার API (Movie, TV Series, Anime DUB/SUB)
+// ৪. JSON RESOLVE API
 // ==========================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}_${params.malId || ''}`;
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
   let streamUrl = null;
@@ -176,6 +203,12 @@ app.get('/api/resolve-stream', async (req, res) => {
     try {
       const browser = await getWarmBrowser();
       const urls = getWebProviderUrls(params);
+
+      // অ্যানিমে হলে Anikoto API চেক
+      if (params.isAnime && !params.malId && !params.anilistId) {
+        const directEmbed = await getAnikotoApiStream(params.id, params.episode, params.lang);
+        if (directEmbed) urls.unshift(directEmbed);
+      }
 
       for (const url of urls) {
         streamUrl = await fastScrape(browser, url);
@@ -210,10 +243,10 @@ app.get('/api/resolve-stream', async (req, res) => {
   });
 });
 
-// মেইন প্লে এন্ডপয়েন্ট
+// মেইন প্লে পাইপলাইন
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}_${params.malId || ''}`;
 
   let streamUrl = null;
   let usedUrl = '';
@@ -248,7 +281,7 @@ app.get('/api/moviebox/play', async (req, res) => {
 });
 
 // ==========================================
-// 5. সেগমেন্ট রিরাইট প্রক্সি টানেল
+// ৫. রিভার্স প্রক্সি টানেল
 // ==========================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -311,7 +344,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal Anime/TV/Movie Scraper Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 Scraper Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
