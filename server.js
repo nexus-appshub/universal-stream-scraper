@@ -37,10 +37,10 @@ async function getFreshMboxToken() {
   return cachedMboxToken;
 }
 
-// মুভির নাম দিয়ে স্বয়ংক্রিয়ভাবে MovieBox-এ subjectId সার্চ করা
+// মুভির নাম দিয়ে স্বয়ংক্রিয়ভাবে MovieBox-এ সার্চ করা (/search/result)
 async function searchMovieBoxSubjectId(keyword, token) {
   try {
-    const res = await axios.get('https://tv.aoneroom.com/wefeed-tv-bff/search/keyword', {
+    const res = await axios.get('https://tv.aoneroom.com/wefeed-tv-bff/search/result', {
       params: {
         keyword: keyword,
         page: 1,
@@ -50,7 +50,7 @@ async function searchMovieBoxSubjectId(keyword, token) {
         ...MBOX_HEADERS,
         'Authorization': `Bearer ${token}`
       },
-      timeout: 6000
+      timeout: 8000
     });
 
     const items = res.data?.data?.items || [];
