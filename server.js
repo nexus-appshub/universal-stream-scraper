@@ -61,7 +61,6 @@ async function getMovieBoxStream(subjectId, se = 0, ep = 0) {
       isMpd: !mp4Url && !!dashStream?.url
     };
   } catch (err) {
-    console.log('MovieBox API error:', err.message);
     return null;
   }
 }
@@ -74,7 +73,8 @@ function getWebProviderUrls(id, s = 1, e = 1, type = 'movie') {
   return [
     isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`,
     isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`,
-    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`
+    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`,
+    isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`
   ];
 }
 
@@ -150,6 +150,7 @@ async function scrapeWebStream(browser, targetUrl) {
 app.get('/api/moviebox/play', async (req, res) => {
   const { subjectId, id, type = 'movie', s = 1, e = 1 } = req.query;
   const targetId = subjectId || id || '8826677989518759008';
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
 
   // ১ম ধাপ: MovieBox সরাসরি চেক করা
   const mboxData = await getMovieBoxStream(targetId, s, e);
@@ -173,12 +174,10 @@ app.get('/api/moviebox/play', async (req, res) => {
       });
 
       return streamRes.data.pipe(res);
-    } catch (err) {
-      console.log('MBox pipe failed, falling back to Web Scraper');
-    }
+    } catch (err) {}
   }
 
-  // ২য় ধাপ: ডকার-সেফ Puppeteer স্ক্র্যাপার চালানো
+  // ২য় ধাপ: ফলব্যাক হিসেবে Puppeteer Web Scraper চালানো
   let browser = null;
   let finalStream = null;
   let usedUrl = '';
@@ -199,6 +198,12 @@ app.get('/api/moviebox/play', async (req, res) => {
 
     if (!finalStream) {
       return res.status(404).send('Movie stream not available.');
+    }
+
+    // যদি m3u8 ফাইল হয় তবে সেগমেন্ট প্রক্সির জন্য রিডাইরেক্ট করা
+    if (finalStream.includes('.m3u8')) {
+      const proxyTarget = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalStream)}&referer=${encodeURIComponent(usedUrl)}`;
+      return res.redirect(proxyTarget);
     }
 
     const fallbackStream = await axios({
@@ -229,7 +234,24 @@ app.get('/api/moviebox/play', async (req, res) => {
   }
 });
 
-// সরাসরি CDN প্রক্সি
+// ==========================================
+// 4. ANDROID APP JSON API ENDPOINT
+// ==========================================
+app.get('/api/get-stream', async (req, res) => {
+  const { id = '550', type = 'movie', s = 1, e = 1 } = req.query;
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
+
+  res.json({
+    success: true,
+    id,
+    type,
+    directStreamUrl: `${hostUrl}/api/moviebox/play?id=${id}&type=${type}&s=${s}&e=${e}`
+  });
+});
+
+// ==========================================
+// 5. UNIVERSAL CDN PROXY PIPE (M3U8 & TS SUPPORT)
+// ==========================================
 app.get('/api/stream-proxy', async (req, res) => {
   const { url, referer, cookie } = req.query;
   if (!url) return res.status(400).send('URL missing');
@@ -246,13 +268,14 @@ app.get('/api/stream-proxy', async (req, res) => {
       headers: {
         'Cookie': cookie ? decodeURIComponent(cookie) : '',
         'Referer': ref,
+        'Origin': ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
       },
       timeout: 25000
     });
 
     res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp4',
+      'Content-Type': response.headers['content-type'] || (target.includes('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4'),
       'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes'
     });
