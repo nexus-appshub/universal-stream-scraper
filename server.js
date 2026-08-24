@@ -11,22 +11,19 @@ puppeteer.use(StealthPlugin());
 
 const app = express();
 
-// ১. Railway HTTPS প্রক্সি ট্রাস্ট এনাবল (Mixed Content Fix)
 app.set('trust proxy', 1);
 
-// ২. ফুল ওপেন CORS
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: '*' }));
+// ফুল উন্মুক্ত CORS
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
   res.header('Access-Control-Allow-Headers', '*');
+  res.header('Access-Control-Expose-Headers', '*');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-// ==========================================
-// মেমোরি ক্যাশ ও ব্রাউজার পুল
-// ==========================================
 const streamCache = new Map();
 const CACHE_TTL = 3 * 60 * 60 * 1000;
 let globalBrowser = null;
@@ -59,8 +56,8 @@ function getWebProviderUrls(id, s = 1, e = 1, type = 'movie') {
   const isTv = type === 'tv';
   return [
     isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`,
-    isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`,
-    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`
+    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`,
+    isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`
   ];
 }
 
@@ -106,13 +103,60 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 4500);
+    }, 5000);
   });
 }
 
 // ==========================================
-// মেইন ডাইরেক্ট স্ট্রিম এন্ডপয়েন্ট
+// ১. JSON রেজলভার API (যাতে ব্রাউজার সরাসরি Raw URL পায়)
 // ==========================================
+app.get('/api/resolve-stream', async (req, res) => {
+  const { id = '27205', type = 'movie', s = 1, e = 1 } = req.query;
+  const cacheKey = `${id}_${type}_${s}_${e}`;
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
+
+  let streamUrl = null;
+  let usedUrl = '';
+
+  const cached = streamCache.get(cacheKey);
+  if (cached && (Date.now() - cached.time < CACHE_TTL)) {
+    streamUrl = cached.url;
+    usedUrl = cached.ref;
+  } else {
+    try {
+      const browser = await getWarmBrowser();
+      const urls = getWebProviderUrls(id, s, e, type);
+
+      for (const url of urls) {
+        streamUrl = await fastScrape(browser, url);
+        if (streamUrl) {
+          usedUrl = url;
+          break;
+        }
+      }
+
+      if (streamUrl) {
+        streamCache.set(cacheKey, { url: streamUrl, ref: usedUrl, time: Date.now() });
+      }
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  if (!streamUrl) {
+    return res.status(404).json({ success: false, message: 'Stream Offline' });
+  }
+
+  const directProxiedUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(usedUrl)}`;
+  return res.json({
+    success: true,
+    streamUrl: directProxiedUrl,
+    rawUrl: streamUrl,
+    referer: usedUrl
+  });
+});
+
+// মেইন প্লে এন্ডপয়েন্ট
 app.get('/api/moviebox/play', async (req, res) => {
   const { id = '27205', type = 'movie', s = 1, e = 1 } = req.query;
   const cacheKey = `${id}_${type}_${s}_${e}`;
@@ -146,19 +190,14 @@ app.get('/api/moviebox/play', async (req, res) => {
   }
 
   if (!streamUrl) return res.status(404).send('Stream Offline');
-
   return pipeMediaTunnel(req, res, streamUrl, usedUrl);
 });
 
-// ==========================================
-// সম্পূর্ণ HTTPS ও সাব-প্লেলিস্ট রিরাইট টানেল
-// ==========================================
+// টানেল হ্যান্ডলার
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     const domain = new URL(targetUrl).origin;
     const ref = referer || domain;
-    
-    // সর্বদা কঠোর HTTPS হোস্ট ইউআরএল নিশ্চিত করা
     const protocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.get('host');
     const proxyBase = `${protocol}://${host}/api/stream-proxy`;
