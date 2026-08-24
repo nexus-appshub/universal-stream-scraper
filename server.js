@@ -11,101 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. MOVIEBOX FULL AUTH & HEADERS
-// ==========================================
-const MBOX_HEADERS = {
-  'User-Agent': 'com.community.mbox.tv/50040011 (Linux; U; Android 9; en_US; 23078RKD5C; Build/PQ3B.190801.07131748; Cronet/151.0.7922.47)',
-  'X-Client-Build': '1787583110033868490.2da8141bcc71715a997c2f34ae3bad3a-1787582559504118222.61ede1b697ede0681bcf08de51af83f6',
-  'X-Client-Info': JSON.stringify({
-    package_name: "com.community.mbox.tv",
-    version_name: "1.1.6.0723.03",
-    version_code: 50040011,
-    os: "android",
-    os_version: "9",
-    install_ch: "google-play",
-    device_id: "501f992004b12de5c061c895d82502d7",
-    brand: "Redmi",
-    model: "23078RKD5C",
-    system_language: "en",
-    net: "NETWORK_WIFI",
-    timezone: "Asia/Dhaka",
-    country_iso_code: "US"
-  }),
-  'X-Client-Status': '1',
-  'X-Play-Mode': 'stream',
-  'X-Family-Mode': '0',
-  'X-Idle-Data': '1'
-};
-
-let cachedMboxToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjYwNDk1NjQ5MTA2NjkyMzIsImV4cCI6MTc5NTM1ODUwMn0.ZKkU5-K-Hw63EHFcgUQ';
-
-// অটোমেটিক ভিজিটর লগইন
-async function getFreshMboxToken() {
-  try {
-    const res = await axios.post('https://tv.aoneroom.com/wefeed-tv-bff/user/visitor-login', {}, {
-      headers: MBOX_HEADERS,
-      timeout: 5000
-    });
-    if (res.data?.data?.token) {
-      cachedMboxToken = res.data.data.token;
-    }
-  } catch (err) {}
-  return cachedMboxToken;
-}
-
-// 🟢 সরাসরি ভিডিও প্লে করার ডিরেক্ট স্ট্রিম এন্ডপয়েন্ট
-app.get('/api/moviebox/play', async (req, res) => {
-  const { subjectId = '8826677989518759008', se = 0, ep = 0 } = req.query;
-
-  try {
-    const token = await getFreshMboxToken();
-
-    // প্লে ইনফো কল
-    const response = await axios.get('https://tv.aoneroom.com/wefeed-tv-bff/subject/play-info', {
-      params: { subjectId, se, ep },
-      headers: {
-        ...MBOX_HEADERS,
-        'Authorization': `Bearer ${token}`
-      },
-      timeout: 10000
-    });
-
-    const data = response.data?.data;
-    const mp4Url = data?.resources?.[0]?.url;
-    const dashUrl = data?.streams?.[0]?.url;
-    const signCookie = data?.streams?.[0]?.signCookie || '';
-    const videoTarget = mp4Url || dashUrl;
-
-    if (!videoTarget) {
-      return res.status(404).send('No streaming stream found for this movie');
-    }
-
-    // সরাসরি ক্লাউডফ্রন্ট বাইপাস করে ভিডিও স্ট্রিম পাইপ করা
-    const streamRes = await axios({
-      method: 'GET',
-      url: videoTarget,
-      responseType: 'stream',
-      headers: {
-        'Cookie': signCookie,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      }
-    });
-
-    res.set({
-      'Content-Type': streamRes.headers['content-type'] || 'video/mp4',
-      'Access-Control-Allow-Origin': '*',
-      'Accept-Ranges': 'bytes'
-    });
-
-    streamRes.data.pipe(res);
-
-  } catch (err) {
-    res.status(500).send('Streaming error: ' + (err.response?.data?.message || err.message));
-  }
-});
-
-// ==========================================
-// 2. UNIVERSAL CDN / STREAM PROXY PIPE
+// 1. UNIVERSAL CDN / STREAM PROXY PIPE
 // ==========================================
 app.get('/api/stream-proxy', async (req, res) => {
   const { url, referer, cookie } = req.query;
@@ -132,7 +38,7 @@ app.get('/api/stream-proxy', async (req, res) => {
       url: target,
       responseType: 'stream',
       headers,
-      timeout: 15000
+      timeout: 20000
     });
 
     res.set({
@@ -143,12 +49,12 @@ app.get('/api/stream-proxy', async (req, res) => {
 
     response.data.pipe(res);
   } catch (error) {
-    res.status(500).json({ error: 'CDN Proxy Pipe Failed', message: error.message });
+    res.status(500).json({ error: 'Stream Proxy Pipe Failed', message: error.message });
   }
 });
 
 // ==========================================
-// 3. TMDB SCRAPER ENDPOINT (Vidnest/Vidrock)
+// 2. DIRECT MOVIE / STREAM PLAYER ROUTE
 // ==========================================
 function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
   const isTv = type === 'tv';
@@ -157,15 +63,19 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
       return isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`;
     case 'vidrock':
       return isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`;
+    case 'vidsrc':
+    case 'vidsrc_to':
+      return isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`;
+    case 'autoembed':
+      return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`;
     default:
       return isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`;
   }
 }
 
-app.get('/api/get-stream', async (req, res) => {
-  const { provider = 'vidnest', id, s = 1, e = 1, type = 'movie' } = req.query;
-
-  if (!id) return res.status(400).json({ success: false, error: 'Media ID is required' });
+// 🟢 ব্রাউজারে সরাসরি ভিডিও প্লে করার এন্ডপয়েন্ট
+app.get('/api/moviebox/play', async (req, res) => {
+  const { id = '550', provider = 'vidnest', type = 'movie', s = 1, e = 1 } = req.query;
 
   const targetUrl = resolveProviderUrl(provider, id, s, e, type);
   let browser = null;
@@ -174,21 +84,57 @@ app.get('/api/get-stream', async (req, res) => {
     browser = await puppeteer.launch({
       headless: 'new',
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-web-security',
+        '--window-size=1920,1080'
+      ]
     });
 
     const page = await browser.newPage();
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    );
+
     let streamUrl = null;
 
     page.on('response', async (response) => {
       const u = response.url();
-      if ((u.includes('.m3u8') || u.includes('.mp4')) && !u.includes('analytics') && !u.includes('doubleclick')) {
+      const isMedia = u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8') || (u.includes('.mp4') && !u.includes('google'));
+      const isBlacklisted = u.includes('githubusercontent.com') || u.includes('analytics') || u.includes('doubleclick') || u.includes('demo-video.mp4');
+
+      if (isMedia && !isBlacklisted) {
         streamUrl = u;
       }
     });
 
-    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-    
+    try {
+      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+    } catch (err) {}
+
+    try {
+      const frames = page.frames();
+      for (const frame of frames) {
+        try {
+          const domSource = await frame.evaluate(() => {
+            const v = document.querySelector('video');
+            return v ? v.src : null;
+          });
+          if (domSource && domSource.startsWith('http') && !domSource.includes('demo-video.mp4')) {
+            streamUrl = domSource;
+            break;
+          }
+          await frame.evaluate(() => {
+            const els = document.querySelectorAll('video, button, #play, .play-btn, .art-video-player');
+            els.forEach(el => el.click && el.click());
+          });
+        } catch (fe) {}
+      }
+    } catch (err) {}
+
     let waitTime = 0;
     while (!streamUrl && waitTime < 10000) {
       await new Promise(r => setTimeout(r, 500));
@@ -197,22 +143,48 @@ app.get('/api/get-stream', async (req, res) => {
 
     await browser.close();
 
-    if (streamUrl) {
-      return res.json({
-        success: true,
-        streamUrl,
-        proxyStreamUrl: `/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`
-      });
-    } else {
-      return res.status(404).json({ success: false, embedUrl: targetUrl });
+    if (!streamUrl) {
+      return res.status(404).send('Stream could not be captured. Please try another provider.');
     }
+
+    // সরাসরি স্ট্রিম প্রক্সি করে ব্রাউজারে ভিডিও প্লে শুরু করা
+    const proxyStreamResponse = await axios({
+      method: 'GET',
+      url: streamUrl,
+      responseType: 'stream',
+      headers: {
+        'Referer': targetUrl,
+        'Origin': new URL(targetUrl).origin,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      },
+      timeout: 15000
+    });
+
+    res.set({
+      'Content-Type': proxyStreamResponse.headers['content-type'] || 'video/mp4',
+      'Access-Control-Allow-Origin': '*',
+      'Accept-Ranges': 'bytes'
+    });
+
+    proxyStreamResponse.data.pipe(res);
+
   } catch (error) {
     if (browser) await browser.close();
-    return res.status(500).json({ success: false, error: error.message });
+    return res.status(500).send('Streaming error: ' + error.message);
   }
 });
 
-app.get('/', (req, res) => res.send('⚡ MovieBox Direct Video Engine Active'));
+// JSON API
+app.get('/api/get-stream', async (req, res) => {
+  const { provider = 'vidnest', id = '550', s = 1, e = 1, type = 'movie' } = req.query;
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
+  res.json({
+    success: true,
+    directPlayUrl: `${hostUrl}/api/moviebox/play?id=${id}&provider=${provider}&type=${type}&s=${s}&e=${e}`
+  });
+});
+
+app.get('/', (req, res) => res.send('🚀 Universal Stream Scraper is Live & Healthy!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Active on port ${PORT}`));
