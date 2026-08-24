@@ -179,19 +179,16 @@ async function fastScrape(browser, targetUrl) {
 }
 
 // ========================================================
-// VIDSRC.SBS DEEP MULTI-LANG SCRAPER (FIXED NESTED IFRAMES)
+// ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER (ROBUST AUTO-TRIGGER)
 // ========================================================
-async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'Multi-Lang') {
+async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsPly') {
   const page = await browser.newPage();
-  
-  // সম্পূর্ণ রিয়্যাল ব্রাউজার এনভায়রনমেন্ট সিমুলেশন
   await page.setViewport({ width: 1280, height: 720 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
   return new Promise(async (resolve) => {
     let resolved = false;
 
-    // নেটওয়ার্ক ট্র্যাফিক থেকে সরাসরি মিডিয়া ক্যাচ করা
     page.on('response', async (response) => {
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
@@ -205,71 +202,82 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'Mult
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 12000 });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
 
-      // ১. পেজের সব আইফ্রেম স্ক্যান করা
-      const clickInsideFrames = async () => {
-        const frames = page.frames();
+      // মাল্টি-ফ্রেম অটো ক্লিক ইঞ্জিন
+      const triggerPlayback = async () => {
+        const frames = [page.mainFrame(), ...page.frames()];
         for (const frame of frames) {
           try {
-            // প্লে বাটন ক্লিক
-            await frame.evaluate(() => {
-              const playBtn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, #player');
-              if (playBtn) playBtn.click();
-            });
-
-            // সার্ভার লিস্ট ওপেন ও সিলেক্ট করা
             await frame.evaluate((srvName) => {
-              const elements = Array.from(document.querySelectorAll('*'));
-              
-              // ড্রপডাউন বা সার্ভার মেনু ওপেন
-              const menuTrigger = elements.find(el => {
-                const txt = (el.innerText || el.textContent || '').trim();
-                return txt.includes('Pro Multi') || txt.includes('Server') || el.classList.contains('server-item');
-              });
-              if (menuTrigger) menuTrigger.click();
+              // ১. প্লে বোতাম ক্লিক
+              const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
+              if (btn) btn.click();
 
-              // টার্গেট সার্ভারে ক্লিক (যেমন: AwsPly, Nitro, VidHindi)
-              const target = elements.find(el => {
-                const txt = (el.innerText || el.textContent || '').trim();
+              // ২. সার্ভার ড্রপডাউন বাটন ওপেন
+              const allElements = Array.from(document.querySelectorAll('*'));
+              const dropdown = allElements.find(el => {
+                const t = (el.innerText || el.textContent || '').trim();
+                return t.includes('Pro Multi') || t.includes('Server') || el.classList.contains('server-item');
+              });
+              if (dropdown) dropdown.click();
+
+              // ৩. টার্গেট সার্ভার নির্বাচন
+              const serverOption = allElements.find(el => {
+                const t = (el.innerText || el.textContent || '').trim();
                 return (
-                  txt.toLowerCase().includes(srvName.toLowerCase()) ||
-                  txt.includes('Multi-Lang') ||
-                  txt.includes('AwsPly') ||
-                  txt.includes('Nitro') ||
-                  txt.includes('VidHindi')
+                  t.toLowerCase().includes(srvName.toLowerCase()) ||
+                  t.includes('Multi-Lang') ||
+                  t.includes('AwsPly') ||
+                  t.includes('Nitro') ||
+                  t.includes('VidHindi') ||
+                  t.includes('VidEmd')
                 );
               });
-              if (target) target.click();
+              if (serverOption) serverOption.click();
             }, preferredServer);
           } catch (e) {}
         }
       };
 
-      await clickInsideFrames();
+      await triggerPlayback();
       await new Promise(r => setTimeout(r, 1500));
-      await clickInsideFrames();
+      await triggerPlayback();
 
     } catch (e) {}
 
-    // টাইমআউট হ্যান্ডলার
     setTimeout(async () => {
       if (!resolved) {
         resolved = true;
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 8000);
+    }, 9000);
   });
 }
+
+function parseParams(query) {
+  const targetId = query.id || query.tmdbId || '27205';
+  const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
+  const title = query.title || '';
+  const isTv = typeStr === 'tv' || typeStr === 'series' || typeStr === 'anime';
+  const season = parseInt(query.s || query.season || query.se || 1);
+  const episode = parseInt(query.e || query.episode || query.ep || 1);
+  const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
+  const malId = query.mal_id || query.malId;
+  const anilistId = query.anilist_id || query.anilistId;
+  const server = query.server || 'AwsPly';
+
+  return { id: targetId, typeStr, isTv, season, episode, lang, malId, anilistId, title, server };
+}
+
 // ========================================================
-// ৩. JSON RESOLVER API (বিদ্যমান কোড অপরিবর্তিত)
+// ৪. মেইন JSON RESOLVER API
 // ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
-  // ১. শুধুমাত্র DUB মোড অন থাকলে MegaPlay/Anikoto লাইব্রেরি কল হবে
   if (params.lang === 'dub') {
     const dubEmbed = await resolveDubStream(params);
     return res.json({
@@ -284,7 +292,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // ২. DUB ছাড়া বাকি সব (SUB + All TMDB Movies & Series) -> TMDB SCRAPER
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
   const cached = streamCache.get(cacheKey);
 
@@ -323,7 +330,6 @@ app.get('/api/resolve-stream', async (req, res) => {
       });
     }
 
-    // ফলব্যাক এম্বেড (TMDB ID ভিত্তিক)
     const fallbackEmbed = params.isTv 
       ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
       : `https://player.autoembed.cc/embed/movie/${params.id}`;
@@ -342,8 +348,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ========================================================
-// ★ নতুন যুক্ত: VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
-// (URL: /api/vidsrc/scrape?id=...&type=movie|tv&s=1&e=1&server=AwsPly|Nitro|Hindi)
+// ৫. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
 // ========================================================
 app.get('/api/vidsrc/scrape', async (req, res) => {
   const params = parseParams(req.query);
@@ -382,9 +387,14 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
       });
     }
 
-    return res.status(404).json({
-      success: false,
-      message: `Could not extract stream for ${params.server} from VidSrc.sbs`
+    // যদি স্ট্রিম ডিরেক্ট স্ক্র্যাপ না হয় তবে সেফ ফলব্যাক ডাইরেক্ট এম্বেড রিটার্ন করবে
+    return res.json({
+      success: true,
+      isEmbed: true,
+      streamUrl: targetUrl,
+      embedUrl: targetUrl,
+      server: params.server,
+      type: params.typeStr
     });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
