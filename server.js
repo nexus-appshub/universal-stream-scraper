@@ -11,23 +11,27 @@ puppeteer.use(StealthPlugin());
 
 const app = express();
 
-// সম্পূর্ণ ওপেন CORS কনফিগারেশন (যাতে যেকোনো ওয়েবসাইট ও অ্যাপ থেকে চলে)
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: '*'
-}));
+// ==========================================
+// 1. ULTRA OPEN CORS & PRE-FLIGHT (Web Fix)
+// ==========================================
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
+  res.header('Access-Control-Allow-Headers', '*');
+  res.header('Access-Control-Expose-Headers', '*');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 app.use(express.json());
 
 // ==========================================
-// 1. INSTANT STREAM CACHE
+// 2. STREAM CACHE & WARM BROWSER
 // ==========================================
 const streamCache = new Map();
 const CACHE_TTL = 3 * 60 * 60 * 1000;
-
-// ==========================================
-// 2. WARM BROWSER POOL
-// ==========================================
 let globalBrowser = null;
 
 async function getWarmBrowser() {
@@ -118,12 +122,11 @@ async function fastScrape(browser, targetUrl) {
 }
 
 // ==========================================
-// 3. MAIN DIRECT STREAM PIPELINE (DIRECT RAW MEDIA)
+// 3. MAIN TUNNELED STREAM ENDPOINT
 // ==========================================
 app.get('/api/moviebox/play', async (req, res) => {
   const { id = '27205', type = 'movie', s = 1, e = 1 } = req.query;
   const cacheKey = `${id}_${type}_${s}_${e}`;
-  const hostUrl = `${req.protocol}://${req.get('host')}`;
 
   let streamUrl = null;
   let usedUrl = '';
@@ -149,35 +152,30 @@ app.get('/api/moviebox/play', async (req, res) => {
         streamCache.set(cacheKey, { url: streamUrl, ref: usedUrl, time: Date.now() });
       }
     } catch (err) {
-      return res.status(500).json({ error: 'Scraper Error', message: err.message });
+      return res.status(500).send('Scraper Error');
     }
   }
 
   if (!streamUrl) {
-    return res.status(404).json({ error: 'Stream not found' });
+    return res.status(404).send('Stream not available');
   }
 
-  // সরাসরি প্রক্সি লিংকে রিডাইরেক্ট (পিওর HLS/MP4 স্ট্রিম হিসেবে)
-  const proxyStreamUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(usedUrl)}`;
-  return res.redirect(proxyStreamUrl);
+  // কোনো রিডাইরেক্ট না করে সরাসরি টানেল দিয়ে পাইপ করা (Web Player Fix)
+  return pipeMediaTunnel(req, res, streamUrl, usedUrl);
 });
 
 // ==========================================
-// 4. TS SEGMENT RE-WRITING STREAM PROXY WITH FULL CORS
+// 4. M3U8 REWRITING TUNNEL ENGINE
 // ==========================================
-app.get('/api/stream-proxy', async (req, res) => {
-  const { url, referer } = req.query;
-  if (!url) return res.status(400).send('URL missing');
-
+async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
-    const target = decodeURIComponent(url);
-    const domain = new URL(target).origin;
-    const ref = referer ? decodeURIComponent(referer) : domain;
+    const domain = new URL(targetUrl).origin;
+    const ref = referer || domain;
 
     const response = await axios({
       method: 'GET',
-      url: target,
-      responseType: target.includes('.m3u8') ? 'text' : 'stream',
+      url: targetUrl,
+      responseType: targetUrl.includes('.m3u8') ? 'text' : 'stream',
       headers: {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
@@ -186,10 +184,10 @@ app.get('/api/stream-proxy', async (req, res) => {
       timeout: 25000
     });
 
-    // M3U8 প্লেলিস্টের ভেতর থাকা সমস্ত সেগমেন্ট লিংক রি-রাইট করা
-    if (target.includes('.m3u8')) {
-      const baseUrl = target.substring(0, target.lastIndexOf('/') + 1);
+    if (targetUrl.includes('.m3u8')) {
+      const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
+      
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith('#')) {
@@ -201,28 +199,31 @@ app.get('/api/stream-proxy', async (req, res) => {
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': '*'
+        'Access-Control-Allow-Origin': '*'
       });
       return res.send(rewritten);
     }
 
     res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp2t',
+      'Content-Type': response.headers['content-type'] || 'video/mp4',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
       'Accept-Ranges': 'bytes'
     });
 
     response.data.pipe(res);
-  } catch (err) {
-    res.status(500).send('Proxy Segment Error');
+  } catch (error) {
+    res.status(500).send('Tunnel pipe error');
   }
+}
+
+// সেগমেন্ট প্রক্সি
+app.get('/api/stream-proxy', async (req, res) => {
+  const { url, referer } = req.query;
+  if (!url) return res.status(400).send('URL missing');
+  return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Video Core Active!'));
+app.get('/', (req, res) => res.send('🚀 Scraper Tunnel Core Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
