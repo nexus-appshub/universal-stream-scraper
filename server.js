@@ -10,7 +10,13 @@ const path = require('path');
 puppeteer.use(StealthPlugin());
 
 const app = express();
-app.use(cors());
+
+// সম্পূর্ণ ওপেন CORS কনফিগারেশন (যাতে যেকোনো ওয়েবসাইট ও অ্যাপ থেকে চলে)
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: '*'
+}));
 app.use(express.json());
 
 // ==========================================
@@ -112,23 +118,21 @@ async function fastScrape(browser, targetUrl) {
 }
 
 // ==========================================
-// 3. MAIN DIRECT STREAM PIPELINE (HLS PLAYER EMBEDDED)
+// 3. MAIN DIRECT STREAM PIPELINE (DIRECT RAW MEDIA)
 // ==========================================
 app.get('/api/moviebox/play', async (req, res) => {
-  const { id = '27205', type = 'movie', s = 1, e = 1, raw } = req.query;
+  const { id = '27205', type = 'movie', s = 1, e = 1 } = req.query;
   const cacheKey = `${id}_${type}_${s}_${e}`;
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
   let streamUrl = null;
   let usedUrl = '';
 
-  // ১. মেমোরি ক্যাশ চেক
   const cached = streamCache.get(cacheKey);
   if (cached && (Date.now() - cached.time < CACHE_TTL)) {
     streamUrl = cached.url;
     usedUrl = cached.ref;
   } else {
-    // ২. ফাস্ট স্ক্র্যাপ
     try {
       const browser = await getWarmBrowser();
       const webUrls = getWebProviderUrls(id, s, e, type);
@@ -145,60 +149,21 @@ app.get('/api/moviebox/play', async (req, res) => {
         streamCache.set(cacheKey, { url: streamUrl, ref: usedUrl, time: Date.now() });
       }
     } catch (err) {
-      return res.status(500).send('Scraper Error: ' + err.message);
+      return res.status(500).json({ error: 'Scraper Error', message: err.message });
     }
   }
 
   if (!streamUrl) {
-    return res.status(404).send('Movie stream currently offline. Please retry.');
+    return res.status(404).json({ error: 'Stream not found' });
   }
 
+  // সরাসরি প্রক্সি লিংকে রিডাইরেক্ট (পিওর HLS/MP4 স্ট্রিম হিসেবে)
   const proxyStreamUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(usedUrl)}`;
-
-  // Android অ্যাপ যদি raw stream চায়
-  if (raw === 'true') {
-    return res.redirect(proxyStreamUrl);
-  }
-
-  // ডেস্কটপ/মোবাইল ব্রাউজারের জন্য সরাসরি বিল্ট-ইন প্রিমিয়াম 4K Hls.js প্লেয়ার
-  return res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Home Air Cinema Player</title>
-      <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-      <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-        video { width: 100%; height: 100%; object-fit: contain; }
-      </style>
-    </head>
-    <body>
-      <video id="player" controls autoplay playsinline></video>
-      <script>
-        const video = document.getElementById('player');
-        const streamUrl = '${proxyStreamUrl}';
-
-        if (Hls.isSupported()) {
-          const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-          hls.loadSource(streamUrl);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = streamUrl;
-          video.addEventListener('loadedmetadata', () => video.play());
-        } else {
-          video.src = streamUrl;
-        }
-      </script>
-    </body>
-    </html>
-  `);
+  return res.redirect(proxyStreamUrl);
 });
 
 // ==========================================
-// 4. TS SEGMENT RE-WRITING STREAM PROXY
+// 4. TS SEGMENT RE-WRITING STREAM PROXY WITH FULL CORS
 // ==========================================
 app.get('/api/stream-proxy', async (req, res) => {
   const { url, referer } = req.query;
@@ -218,10 +183,10 @@ app.get('/api/stream-proxy', async (req, res) => {
         'Origin': ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
       },
-      timeout: 20000
+      timeout: 25000
     });
 
-    // m3u8 ফাইলের ভেতরের TS সেগমেন্টগুলো রি-রাইট করা যাতে 403 ব্লক না হয়
+    // M3U8 প্লেলিস্টের ভেতর থাকা সমস্ত সেগমেন্ট লিংক রি-রাইট করা
     if (target.includes('.m3u8')) {
       const baseUrl = target.substring(0, target.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
@@ -236,7 +201,9 @@ app.get('/api/stream-proxy', async (req, res) => {
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': '*'
       });
       return res.send(rewritten);
     }
@@ -244,6 +211,8 @@ app.get('/api/stream-proxy', async (req, res) => {
     res.set({
       'Content-Type': response.headers['content-type'] || 'video/mp2t',
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': '*',
       'Accept-Ranges': 'bytes'
     });
 
@@ -253,7 +222,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.send('🚀 Home Air Video Core Active!'));
+app.get('/', (req, res) => res.send('🚀 Video Core Active!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
