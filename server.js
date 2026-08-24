@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. MOVIEBOX ENGINE CONFIG & AUTO-TOKEN
+// 1. MOVIEBOX AUTO SEARCH & STREAM ENGINE
 // ==========================================
 const MBOX_HEADERS = {
   'User-Agent': 'com.community.mbox.tv/50040011 (Linux; U; Android 9; en_US; 23078RKD5C; Build/PQ3B.190801.07131748; Cronet/151.0.7922.47)',
@@ -21,6 +21,7 @@ const MBOX_HEADERS = {
 
 let cachedMboxToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjYwNDk1NjQ5MTA2NjkyMzIsImV4cCI6MTc5NTM1ODUwMn0.ZKkU5-K-Hw63EHFcgUQ';
 
+// অটোমেটিক টোকেন জেনারেটর
 async function getFreshMboxToken() {
   try {
     const res = await axios.post('https://tv.aoneroom.com/wefeed-tv-bff/user/visitor-login', {}, {
@@ -31,21 +32,62 @@ async function getFreshMboxToken() {
       cachedMboxToken = res.data.data.token;
     }
   } catch (err) {
-    // Fallback on cached/default token
+    // fallback to cache
   }
   return cachedMboxToken;
 }
 
-// MovieBox API Endpoint
-app.get('/api/moviebox', async (req, res) => {
-  const { subjectId, se = 0, ep = 0 } = req.query;
+// মুভির নাম দিয়ে স্বয়ংক্রিয়ভাবে MovieBox-এ subjectId সার্চ করা
+async function searchMovieBoxSubjectId(keyword, token) {
+  try {
+    const res = await axios.get('https://tv.aoneroom.com/wefeed-tv-bff/search/keyword', {
+      params: {
+        keyword: keyword,
+        page: 1,
+        perPage: 10
+      },
+      headers: {
+        ...MBOX_HEADERS,
+        'Authorization': `Bearer ${token}`
+      },
+      timeout: 6000
+    });
 
-  if (!subjectId) {
-    return res.status(400).json({ success: false, error: 'subjectId param is required' });
+    const items = res.data?.data?.items || [];
+    if (items.length > 0) {
+      return {
+        subjectId: items[0].subjectId,
+        title: items[0].title
+      };
+    }
+  } catch (err) {
+    console.error('MovieBox Search Error:', err.message);
   }
+  return null;
+}
+
+// মেইন MovieBox API (subjectId অথবা title যেকোনো একটি দিলেই কাজ করবে)
+app.get('/api/moviebox', async (req, res) => {
+  let { subjectId, title, se = 0, ep = 0 } = req.query;
 
   try {
     const token = await getFreshMboxToken();
+
+    // যদি subjectId না থাকে কিন্তু মুভির নাম (title) থাকে, তবে অটো সার্চ করবে
+    if (!subjectId && title) {
+      const searchResult = await searchMovieBoxSubjectId(title, token);
+      if (searchResult) {
+        subjectId = searchResult.subjectId;
+      } else {
+        return res.status(404).json({ success: false, message: `No movie found for title: "${title}"` });
+      }
+    }
+
+    if (!subjectId) {
+      return res.status(400).json({ success: false, error: 'Either "subjectId" or "title" is required' });
+    }
+
+    // প্লে-ইনফো কল করা
     const response = await axios.get('https://tv.aoneroom.com/wefeed-tv-bff/subject/play-info', {
       params: { subjectId, se, ep },
       headers: {
@@ -67,6 +109,7 @@ app.get('/api/moviebox', async (req, res) => {
     return res.json({
       success: true,
       title: data.title,
+      subjectId: subjectId,
       streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(dashStream ? dashStream.url : mp4Url)}&cookie=${encodeURIComponent(dashStream?.signCookie || '')}`,
       rawDirectMp4: mp4Url,
       dashManifest: dashStream?.url || null,
@@ -103,7 +146,7 @@ function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
 }
 
 app.get('/', (req, res) => {
-  res.send('⚡ Stealth Scraper & MovieBox Engine Online');
+  res.send('⚡ Stealth Scraper & MovieBox Auto Engine Online');
 });
 
 // ==========================================
