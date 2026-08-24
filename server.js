@@ -11,33 +11,28 @@ puppeteer.use(StealthPlugin());
 
 const app = express();
 
-// ==========================================
-// 1. ULTRA OPEN CORS & PRE-FLIGHT (Web Fix)
-// ==========================================
+// ১. Railway HTTPS প্রক্সি ট্রাস্ট এনাবল (Mixed Content Fix)
+app.set('trust proxy', 1);
+
+// ২. ফুল ওপেন CORS
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', '*');
-  res.header('Access-Control-Expose-Headers', '*');
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-app.use(express.json());
-
 // ==========================================
-// 2. STREAM CACHE & WARM BROWSER
+// মেমোরি ক্যাশ ও ব্রাউজার পুল
 // ==========================================
 const streamCache = new Map();
 const CACHE_TTL = 3 * 60 * 60 * 1000;
 let globalBrowser = null;
 
 async function getWarmBrowser() {
-  if (globalBrowser && globalBrowser.isConnected()) {
-    return globalBrowser;
-  }
+  if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-profile-'));
   globalBrowser = await puppeteer.launch({
     headless: 'new',
@@ -64,24 +59,18 @@ function getWebProviderUrls(id, s = 1, e = 1, type = 'movie') {
   const isTv = type === 'tv';
   return [
     isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`,
-    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`,
-    isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`
+    isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`,
+    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`
   ];
 }
 
 async function fastScrape(browser, targetUrl) {
   const page = await browser.newPage();
-  
   await page.setRequestInterception(true);
   page.on('request', (req) => {
     const type = req.resourceType();
     const url = req.url();
-    if (
-      ['image', 'stylesheet', 'font'].includes(type) ||
-      url.includes('google-analytics') ||
-      url.includes('doubleclick') ||
-      url.includes('adservice')
-    ) {
+    if (['image', 'stylesheet', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick')) {
       req.abort();
     } else {
       req.continue();
@@ -96,7 +85,7 @@ async function fastScrape(browser, targetUrl) {
     page.on('response', async (response) => {
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
-      if (isMedia && !u.includes('analytics') && !u.includes('doubleclick') && !u.includes('demo') && !resolved) {
+      if (isMedia && !resolved) {
         resolved = true;
         await page.close().catch(() => {});
         resolve(u);
@@ -117,12 +106,12 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 5000);
+    }, 4500);
   });
 }
 
 // ==========================================
-// 3. MAIN TUNNELED STREAM ENDPOINT
+// মেইন ডাইরেক্ট স্ট্রিম এন্ডপয়েন্ট
 // ==========================================
 app.get('/api/moviebox/play', async (req, res) => {
   const { id = '27205', type = 'movie', s = 1, e = 1 } = req.query;
@@ -138,9 +127,9 @@ app.get('/api/moviebox/play', async (req, res) => {
   } else {
     try {
       const browser = await getWarmBrowser();
-      const webUrls = getWebProviderUrls(id, s, e, type);
+      const urls = getWebProviderUrls(id, s, e, type);
 
-      for (const url of webUrls) {
+      for (const url of urls) {
         streamUrl = await fastScrape(browser, url);
         if (streamUrl) {
           usedUrl = url;
@@ -156,21 +145,23 @@ app.get('/api/moviebox/play', async (req, res) => {
     }
   }
 
-  if (!streamUrl) {
-    return res.status(404).send('Stream not available');
-  }
+  if (!streamUrl) return res.status(404).send('Stream Offline');
 
-  // কোনো রিডাইরেক্ট না করে সরাসরি টানেল দিয়ে পাইপ করা (Web Player Fix)
   return pipeMediaTunnel(req, res, streamUrl, usedUrl);
 });
 
 // ==========================================
-// 4. M3U8 REWRITING TUNNEL ENGINE
+// সম্পূর্ণ HTTPS ও সাব-প্লেলিস্ট রিরাইট টানেল
 // ==========================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     const domain = new URL(targetUrl).origin;
     const ref = referer || domain;
+    
+    // সর্বদা কঠোর HTTPS হোস্ট ইউআরএল নিশ্চিত করা
+    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    const host = req.get('host');
+    const proxyBase = `${protocol}://${host}/api/stream-proxy`;
 
     const response = await axios({
       method: 'GET',
@@ -179,20 +170,23 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       headers: {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      timeout: 25000
+      timeout: 20000
     });
 
     if (targetUrl.includes('.m3u8')) {
       const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
-      
+
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith('#')) {
-          const segmentUrl = trimmed.startsWith('http') ? trimmed : baseUrl + trimmed;
-          return `${req.protocol}://${req.get('host')}/api/stream-proxy?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
+          let segmentUrl = trimmed;
+          if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+            segmentUrl = new URL(trimmed, baseUrl).href;
+          }
+          return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
         }
         return line;
       }).join('\n');
@@ -212,18 +206,17 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
     response.data.pipe(res);
   } catch (error) {
-    res.status(500).send('Tunnel pipe error');
+    res.status(500).send('Stream Tunnel Error');
   }
 }
 
-// সেগমেন্ট প্রক্সি
 app.get('/api/stream-proxy', async (req, res) => {
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Scraper Tunnel Core Online!'));
+app.get('/', (req, res) => res.send('🚀 Scraper Native Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
