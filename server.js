@@ -14,7 +14,13 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. MOVIEBOX API ENGINE
+// 1. INSTANT IN-MEMORY CACHE (<0.5s Response)
+// ==========================================
+const streamCache = new Map();
+const CACHE_TTL = 3 * 60 * 60 * 1000; // ৩ ঘণ্টা ক্যাশ থাকবে
+
+// ==========================================
+// 2. MOVIEBOX API ENGINE
 // ==========================================
 const MBOX_HEADERS = {
   'User-Agent': 'com.community.mbox.tv/50040011 (Linux; U; Android 9; en_US; 23078RKD5C; Build/PQ3B.190801.07131748; Cronet/151.0.7922.47)',
@@ -28,7 +34,7 @@ async function getFreshMboxToken() {
   try {
     const res = await axios.post('https://tv.aoneroom.com/wefeed-tv-bff/user/visitor-login', {}, {
       headers: MBOX_HEADERS,
-      timeout: 5000
+      timeout: 4000
     });
     if (res.data?.data?.token) {
       cachedMboxToken = res.data.data.token;
@@ -46,7 +52,7 @@ async function getMovieBoxStream(subjectId, se = 0, ep = 0) {
         ...MBOX_HEADERS,
         'Authorization': `Bearer ${token}`
       },
-      timeout: 8000
+      timeout: 6000
     });
 
     const data = res.data?.data;
@@ -61,27 +67,21 @@ async function getMovieBoxStream(subjectId, se = 0, ep = 0) {
       isMpd: !mp4Url && !!dashStream?.url
     };
   } catch (err) {
-    console.log('MovieBox API error:', err.message);
     return null;
   }
 }
 
 // ==========================================
-// 2. WEB SCRAPER WITH DOCKER LOCK FIX
+// 3. WARM BROWSER POOL & FAST SCRAPER
 // ==========================================
-function getWebProviderUrls(id, s = 1, e = 1, type = 'movie') {
-  const isTv = type === 'tv';
-  return [
-    isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`,
-    isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`,
-    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`
-  ];
-}
+let globalBrowser = null;
 
-async function launchSafeBrowser() {
+async function getWarmBrowser() {
+  if (globalBrowser && globalBrowser.isConnected()) {
+    return globalBrowser;
+  }
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-profile-'));
-  
-  return await puppeteer.launch({
+  globalBrowser = await puppeteer.launch({
     headless: 'new',
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     userDataDir: tempDir,
@@ -93,99 +93,108 @@ async function launchSafeBrowser() {
       '--no-zygote',
       '--single-process',
       '--disable-extensions',
-      '--disable-features=IsolateOrigins,site-per-process'
+      '--blink-settings=imagesEnabled=false',
+      '--disable-remote-fonts'
     ]
   });
+  return globalBrowser;
+}
+
+getWarmBrowser().catch(() => {});
+
+function getWebProviderUrls(id, s = 1, e = 1, type = 'movie') {
+  const isTv = type === 'tv';
+  return [
+    isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`,
+    isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`,
+    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`,
+    isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`
+  ];
 }
 
 async function scrapeWebStream(browser, targetUrl) {
   const page = await browser.newPage();
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-
-  let streamUrl = null;
-
-  page.on('response', (response) => {
-    const u = response.url();
-    const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
-    if (isMedia && !u.includes('analytics') && !u.includes('doubleclick') && !u.includes('demo')) {
-      streamUrl = u;
+  
+  await page.setRequestInterception(true);
+  page.on('request', (req) => {
+    const type = req.resourceType();
+    const url = req.url();
+    if (
+      ['image', 'stylesheet', 'font'].includes(type) ||
+      url.includes('google-analytics') ||
+      url.includes('doubleclick') ||
+      url.includes('clarity') ||
+      url.includes('adservice')
+    ) {
+      req.abort();
+    } else {
+      req.continue();
     }
   });
 
-  try {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
-  } catch (e) {}
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-  try {
-    const frames = page.frames();
-    for (const frame of frames) {
-      const domSource = await frame.evaluate(() => {
-        const v = document.querySelector('video');
-        return v ? v.src : null;
-      });
-      if (domSource && domSource.startsWith('http') && !domSource.includes('demo')) {
-        streamUrl = domSource;
-        break;
+  return new Promise(async (resolve) => {
+    let resolved = false;
+
+    page.on('response', async (response) => {
+      const u = response.url();
+      const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
+      if (isMedia && !u.includes('analytics') && !u.includes('doubleclick') && !u.includes('demo') && !resolved) {
+        resolved = true;
+        await page.close().catch(() => {});
+        resolve(u);
       }
-      await frame.evaluate(() => {
+    });
+
+    try {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+      await page.evaluate(() => {
         const btn = document.querySelector('video, button, #play, .play-btn');
         if (btn) btn.click();
       });
-    }
-  } catch (e) {}
+    } catch (e) {}
 
-  let waitTime = 0;
-  while (!streamUrl && waitTime < 6000) {
-    await new Promise(r => setTimeout(r, 400));
-    waitTime += 400;
-  }
-
-  await page.close();
-  return streamUrl;
+    setTimeout(async () => {
+      if (!resolved) {
+        resolved = true;
+        await page.close().catch(() => {});
+        resolve(null);
+      }
+    }, 4500);
+  });
 }
 
 // ==========================================
-// 3. MAIN DIRECT STREAM PIPELINE
+// 4. MAIN STREAM CONTROLLER
 // ==========================================
 app.get('/api/moviebox/play', async (req, res) => {
   const { subjectId, id, type = 'movie', s = 1, e = 1 } = req.query;
   const targetId = subjectId || id || '8826677989518759008';
+  const cacheKey = `${targetId}_${type}_${s}_${e}`;
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
 
-  // ১ম ধাপ: MovieBox সরাসরি চেক করা
-  const mboxData = await getMovieBoxStream(targetId, s, e);
-  if (mboxData && mboxData.streamUrl) {
-    try {
-      const streamRes = await axios({
-        method: 'GET',
-        url: mboxData.streamUrl,
-        responseType: 'stream',
-        headers: {
-          'Cookie': mboxData.cookie,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        },
-        timeout: 25000
-      });
-
-      res.set({
-        'Content-Type': streamRes.headers['content-type'] || (mboxData.isMpd ? 'application/dash+xml' : 'video/mp4'),
-        'Access-Control-Allow-Origin': '*',
-        'Accept-Ranges': 'bytes'
-      });
-
-      return streamRes.data.pipe(res);
-    } catch (err) {
-      console.log('MBox pipe failed, falling back to Web Scraper');
-    }
+  // ১. মেমোরি ক্যাশ চেক
+  const cached = streamCache.get(cacheKey);
+  if (cached && (Date.now() - cached.time < CACHE_TTL)) {
+    return pipeMediaStream(cached.url, cached.ref, cached.cookie, res);
   }
 
-  // ২য় ধাপ: ডকার-সেফ Puppeteer স্ক্র্যাপার চালানো
+  // ২. MovieBox ডিরেক্ট চেক
+  const mboxData = await getMovieBoxStream(targetId, s, e);
+  if (mboxData && mboxData.streamUrl) {
+    streamCache.set(cacheKey, { url: mboxData.streamUrl, ref: 'https://tv.aoneroom.com/', cookie: mboxData.cookie, time: Date.now() });
+    return pipeMediaStream(mboxData.streamUrl, 'https://tv.aoneroom.com/', mboxData.cookie, res);
+  }
+
+  // ৩. ফাস্ট ওয়েব স্ক্র্যাপার
   let browser = null;
   let finalStream = null;
   let usedUrl = '';
   const webUrls = getWebProviderUrls(targetId, s, e, type);
 
   try {
-    browser = await launchSafeBrowser();
+    browser = await getWarmBrowser();
 
     for (const url of webUrls) {
       finalStream = await scrapeWebStream(browser, url);
@@ -195,41 +204,70 @@ app.get('/api/moviebox/play', async (req, res) => {
       }
     }
 
-    await browser.close();
-
     if (!finalStream) {
       return res.status(404).send('Movie stream not available.');
     }
 
-    const fallbackStream = await axios({
-      method: 'GET',
-      url: finalStream,
-      responseType: 'stream',
-      headers: {
-        'Referer': usedUrl,
-        'Origin': new URL(usedUrl).origin,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      },
-      timeout: 25000
-    });
+    streamCache.set(cacheKey, { url: finalStream, ref: usedUrl, cookie: '', time: Date.now() });
 
-    res.set({
-      'Content-Type': fallbackStream.headers['content-type'] || 'video/mp4',
-      'Access-Control-Allow-Origin': '*',
-      'Accept-Ranges': 'bytes'
-    });
+    if (finalStream.includes('.m3u8')) {
+      const proxyTarget = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalStream)}&referer=${encodeURIComponent(usedUrl)}`;
+      return res.redirect(proxyTarget);
+    }
 
-    return fallbackStream.data.pipe(res);
+    return pipeMediaStream(finalStream, usedUrl, '', res);
 
   } catch (err) {
-    if (browser) {
-      try { await browser.close(); } catch (e) {}
-    }
     return res.status(500).send('Streaming error: ' + err.message);
   }
 });
 
-// সরাসরি CDN প্রক্সি
+// সরাসরি স্ট্রিম পাইপ হেল্পার
+async function pipeMediaStream(streamUrl, referer, cookie, res) {
+  try {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    };
+    if (cookie) headers['Cookie'] = cookie;
+    if (referer) {
+      headers['Referer'] = referer;
+      headers['Origin'] = new URL(referer).origin;
+    }
+
+    const streamRes = await axios({
+      method: 'GET',
+      url: streamUrl,
+      responseType: 'stream',
+      headers,
+      timeout: 20000
+    });
+
+    res.set({
+      'Content-Type': streamRes.headers['content-type'] || (streamUrl.includes('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4'),
+      'Access-Control-Allow-Origin': '*',
+      'Accept-Ranges': 'bytes'
+    });
+
+    streamRes.data.pipe(res);
+  } catch (error) {
+    res.status(500).send('Stream pipe error');
+  }
+}
+
+// JSON API
+app.get('/api/get-stream', async (req, res) => {
+  const { id = '550', type = 'movie', s = 1, e = 1 } = req.query;
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
+
+  res.json({
+    success: true,
+    id,
+    type,
+    directStreamUrl: `${hostUrl}/api/moviebox/play?id=${id}&type=${type}&s=${s}&e=${e}`
+  });
+});
+
+// CDN প্রক্সি
 app.get('/api/stream-proxy', async (req, res) => {
   const { url, referer, cookie } = req.query;
   if (!url) return res.status(400).send('URL missing');
@@ -246,13 +284,14 @@ app.get('/api/stream-proxy', async (req, res) => {
       headers: {
         'Cookie': cookie ? decodeURIComponent(cookie) : '',
         'Referer': ref,
+        'Origin': ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
       },
-      timeout: 25000
+      timeout: 20000
     });
 
     res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp4',
+      'Content-Type': response.headers['content-type'] || (target.includes('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4'),
       'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes'
     });
@@ -263,7 +302,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.send('🚀 Docker Safe Scraper Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 Turbo 2s Ultra Fast Scraper Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
