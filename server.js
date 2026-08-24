@@ -50,45 +50,97 @@ async function getWarmBrowser() {
 
 getWarmBrowser().catch(() => {});
 
-// ==========================================
-// ১. ANIKOTO NATIVE REST API (INSTANT 0.1s)
-// ==========================================
-async function resolveAnikotoEmbed(params) {
-  const { id, episode = 1, lang = 'sub', malId, anilistId } = params;
-
-  // MAL আইডি থাকলে
-  if (malId) {
-    return `https://megaplay.buzz/stream/mal/${malId}/${episode}/${lang}`;
-  }
-
-  // AniList আইডি থাকলে
-  if (anilistId) {
-    return `https://megaplay.buzz/stream/ani/${anilistId}/${episode}/${lang}`;
-  }
-
-  // সরাসরি Anikoto API কল (Catalog ID দিয়ে)
+// ========================================================
+// ১. TMDB ID -> ANILIST / MAL ID অটো কনভার্টার (Jikan/Anilist)
+// ========================================================
+async function getAnimeExternalIds(tmdbId, title = '') {
   try {
-    const res = await axios.get(`https://anikotoapi.site/series/${id}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-      timeout: 5000
-    });
+    // নাম অথবা TMDB আইডি দিয়ে দ্রুত AniList সার্চ
+    const query = `
+      query ($search: String) {
+        Media (search: $search, type: ANIME) {
+          id
+          idMal
+          title { english romaji }
+        }
+      }
+    `;
+    const cleanTitle = title.replace(/[^\w\s]/gi, '');
+    if (cleanTitle) {
+      const res = await axios.post('https://graphql.anilist.co', {
+        query,
+        variables: { search: cleanTitle }
+      }, { timeout: 4000 });
 
+      const media = res.data?.data?.Media;
+      if (media) {
+        return { malId: media.idMal, anilistId: media.id };
+      }
+    }
+  } catch (e) {}
+  return { malId: null, anilistId: null };
+}
+
+// ========================================================
+// ২. ANIKOTO DUB/SUB রেজলভার
+// ========================================================
+async function resolveAnimeStream(params) {
+  const { id, episode = 1, lang = 'dub', title } = params;
+  let { malId, anilistId } = params;
+
+  // যদি সরাসরি MAL/AniList আইডি না থাকে, তবে অটো কনভার্ট করা
+  if (!malId && !anilistId) {
+    const ext = await getAnimeExternalIds(id, title);
+    malId = ext.malId;
+    anilistId = ext.anilistId;
+  }
+
+  // ১. MAL Endpoint (ডকুমেন্টেশন অনুযায়ী সবচেয়ে নিখুঁত DUB/SUB প্রদান করে)
+  if (malId) {
+    return {
+      embedUrl: `https://megaplay.buzz/stream/mal/${malId}/${episode}/${lang}`, //
+      isEmbed: true,
+      lang
+    };
+  }
+
+  // ২. AniList Endpoint
+  if (anilistId) {
+    return {
+      embedUrl: `https://megaplay.buzz/stream/ani/${anilistId}/${episode}/${lang}`, //
+      isEmbed: true,
+      lang
+    };
+  }
+
+  // ৩. সরাসরি Anikoto API
+  try {
+    const res = await axios.get(`https://anikotoapi.site/series/${id}`, { timeout: 4000 }); //
     const episodes = res.data?.episodes || res.data?.data?.episodes;
     if (episodes && episodes.length > 0) {
       const ep = episodes.find(e => Number(e.number) === Number(episode)) || episodes[episode - 1] || episodes[0];
       const embedId = ep?.episode_embed_id || ep?.id;
       if (embedId) {
-        return `https://megaplay.buzz/stream/s-2/${embedId}/${lang}`;
+        return {
+          embedUrl: `https://megaplay.buzz/stream/s-2/${embedId}/${lang}`, //
+          isEmbed: true,
+          lang
+        };
       }
     }
   } catch (err) {}
 
-  return `https://megaplay.buzz/stream/s-2/${id}/${lang}`;
+  // ফলব্যাক DUB মেগাপ্লে
+  return {
+    embedUrl: `https://megaplay.buzz/stream/s-2/${id}/${lang}`, //
+    isEmbed: true,
+    lang
+  };
 }
 
-// ==========================================
-// ২. মুভি ও টিভি প্রোভাইডার পুল
-// ==========================================
+// ========================================================
+// ৩. মুভি ও টিভি সিরিজ প্রোভাইডার
+// ========================================================
 function getWebProviderUrls(params) {
   const { id, isTv, season, episode } = params;
 
@@ -158,41 +210,45 @@ async function fastScrape(browser, targetUrl) {
 }
 
 function parseParams(query) {
-  const targetId = query.id || query.subjectId || query.tmdbId || '20';
-  const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
-  const isAnime = typeStr === 'anime';
-  const isTv = typeStr === 'tv' || typeStr === 'series' || typeStr === 'show';
+  const targetId = query.id || query.subjectId || query.tmdbId || '223564';
+  const typeStr = (query.type || query.media_type || 'tv').toLowerCase();
+  const title = query.title || '';
+  const isAnime = typeStr === 'anime' || query.isAnime === 'true' || title.toLowerCase().includes('anime');
+  const isTv = typeStr === 'tv' || typeStr === 'series' || isAnime;
   const season = parseInt(query.s || query.season || query.se || 1);
   const episode = parseInt(query.e || query.episode || query.ep || 1);
   const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
   const malId = query.mal_id || query.malId;
   const anilistId = query.anilist_id || query.anilistId;
 
-  return { id: targetId, typeStr, isAnime, isTv, season, episode, lang, malId, anilistId };
+  return { id: targetId, typeStr, isAnime, isTv, season, episode, lang, malId, anilistId, title };
 }
 
-// ==========================================
-// ৩. JSON রেজলভার API (অ্যানিমের জন্য ডাইরেক্ট মেগাপ্লে এম্বেড + মুভির জন্য স্ক্র্যাপার)
-// ==========================================
+// ========================================================
+// ৪. মেইন JSON RESOLVER API
+// ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
-  // ১. অ্যানিমে হ্যান্ডলিং (Anikoto API + MegaPlay Buzz)
-  if (params.isAnime) {
-    const embedUrl = await resolveAnikotoEmbed(params);
-    return res.json({
-      success: true,
-      isEmbed: true,
-      streamUrl: embedUrl,
-      embedUrl: embedUrl,
-      type: 'anime',
-      lang: params.lang,
-      episode: params.episode
-    });
+  // ১. এনিমে DUB / SUB স্পেসিফিক হ্যান্ডলার
+  if (params.isAnime || params.malId || params.anilistId || req.query.lang) {
+    const animeStream = await resolveAnimeStream(params);
+    if (animeStream && animeStream.embedUrl) {
+      return res.json({
+        success: true,
+        isEmbed: true,
+        streamUrl: animeStream.embedUrl,
+        embedUrl: animeStream.embedUrl,
+        lang: params.lang,
+        type: 'anime',
+        season: params.season,
+        episode: params.episode
+      });
+    }
   }
 
-  // ২. মুভি ও টিভি সিরিজ হ্যান্ডলিং (Scraper Engine)
+  // ২. মুভি ও নরমাল টিভি সিরিজ হ্যান্ডলার
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
   const cached = streamCache.get(cacheKey);
 
@@ -231,11 +287,7 @@ app.get('/api/resolve-stream', async (req, res) => {
       });
     }
 
-    // স্ক্র্যাপার না পেলে ফলব্যাক এম্বেড
-    const fallbackEmbed = params.isTv 
-      ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
-      : `https://player.autoembed.cc/embed/movie/${params.id}`;
-
+    const fallbackEmbed = `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`;
     return res.json({
       success: true,
       isEmbed: true,
@@ -249,47 +301,19 @@ app.get('/api/resolve-stream', async (req, res) => {
   }
 });
 
-// মেইন প্লে এন্ডপয়েন্ট
+// টানেল হ্যান্ডলার
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
-
-  if (params.isAnime) {
-    const embedUrl = await resolveAnikotoEmbed(params);
-    return res.redirect(embedUrl);
+  if (params.isAnime || req.query.lang) {
+    const animeStream = await resolveAnimeStream(params);
+    return res.redirect(animeStream.embedUrl);
   }
-
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
   const cached = streamCache.get(cacheKey);
-  if (cached && (Date.now() - cached.time < CACHE_TTL)) {
-    return pipeMediaTunnel(req, res, cached.url, cached.ref);
-  }
-
-  try {
-    const browser = await getWarmBrowser();
-    const urls = getWebProviderUrls(params);
-    let streamUrl = null;
-    let usedUrl = '';
-
-    for (const url of urls) {
-      streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        usedUrl = url;
-        break;
-      }
-    }
-
-    if (streamUrl) {
-      streamCache.set(cacheKey, { url: streamUrl, ref: usedUrl, time: Date.now() });
-      return pipeMediaTunnel(req, res, streamUrl, usedUrl);
-    }
-
-    return res.status(404).send('Stream Offline');
-  } catch (err) {
-    return res.status(500).send('Scraper Error');
-  }
+  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  return res.status(404).send('Stream Offline');
 });
 
-// টানেল হ্যান্ডলার
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     const domain = new URL(targetUrl).origin;
@@ -351,7 +375,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal Anime & Cinema Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 Universal Anime & Cinema DUB Core Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
