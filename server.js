@@ -21,7 +21,7 @@ const MBOX_HEADERS = {
 
 let cachedMboxToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjYwNDk1NjQ5MTA2NjkyMzIsImV4cCI6MTc5NTM1ODUwMn0.ZKkU5-K-Hw63EHFcgUQ';
 
-// MovieBox থেকে সরাসরি প্লে স্ট্রিম আনা
+// MovieBox থেকে সরাসরি প্লে স্ট্রিম আনা (MP4 우선 선택)
 async function getMovieBoxStream(subjectId, se = 0, ep = 0) {
   try {
     const res = await axios.get('https://tv.aoneroom.com/wefeed-tv-bff/subject/play-info', {
@@ -30,18 +30,20 @@ async function getMovieBoxStream(subjectId, se = 0, ep = 0) {
         ...MBOX_HEADERS,
         'Authorization': `Bearer ${cachedMboxToken}`
       },
-      timeout: 6000
+      timeout: 8000
     });
 
     const data = res.data?.data;
     if (!data) return null;
 
+    // সরাসরি ব্রাউজারে চালানোর জন্য ডিরেক্ট MP4 রিসোর্সকে সর্বোচ্চ অগ্রাধিকার দেওয়া হয়েছে
     const mp4Url = data.resources?.[0]?.url;
     const dashStream = data.streams?.[0];
 
     return {
-      streamUrl: dashStream ? dashStream.url : mp4Url,
-      cookie: dashStream?.signCookie || ''
+      streamUrl: mp4Url || dashStream?.url,
+      cookie: dashStream?.signCookie || '',
+      isMpd: !mp4Url && !!dashStream?.url
     };
   } catch (err) {
     console.log('MovieBox direct API error/fallback:', err.message);
@@ -76,7 +78,7 @@ async function scrapeWebStream(browser, targetUrl) {
   });
 
   try {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
   } catch (e) {}
 
   try {
@@ -114,7 +116,7 @@ app.get('/api/moviebox/play', async (req, res) => {
   const { subjectId, id, type = 'movie', s = 1, e = 1 } = req.query;
   const targetId = subjectId || id || '8826677989518759008';
 
-  // ১ম ধাপ: সরাসরি MovieBox অফিশিয়াল সার্ভার ট্রাই করা
+  // ১ম ধাপ: সরাসরি MovieBox অফিসিয়াল সার্ভার থেকে স্ট্রিম ফেচ করা
   const mboxData = await getMovieBoxStream(targetId, s, e);
   if (mboxData && mboxData.streamUrl) {
     try {
@@ -124,20 +126,21 @@ app.get('/api/moviebox/play', async (req, res) => {
         responseType: 'stream',
         headers: {
           'Cookie': mboxData.cookie,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          'Referer': 'https://tv.aoneroom.com/'
         },
-        timeout: 20000
+        timeout: 25000
       });
 
       res.set({
-        'Content-Type': streamRes.headers['content-type'] || 'video/mp4',
+        'Content-Type': streamRes.headers['content-type'] || (mboxData.isMpd ? 'application/dash+xml' : 'video/mp4'),
         'Access-Control-Allow-Origin': '*',
         'Accept-Ranges': 'bytes'
       });
 
       return streamRes.data.pipe(res);
     } catch (err) {
-      console.log('MBox pipe failed, falling back to Puppeteer Scraper...');
+      console.log('MovieBox stream pipe error, falling back to Web Scraper:', err.message);
     }
   }
 
@@ -177,7 +180,7 @@ app.get('/api/moviebox/play', async (req, res) => {
         'Origin': new URL(usedUrl).origin,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
       },
-      timeout: 20000
+      timeout: 25000
     });
 
     res.set({
@@ -194,31 +197,52 @@ app.get('/api/moviebox/play', async (req, res) => {
   }
 });
 
-// সরাসরি CDN প্রক্সি
+// ==========================================
+// 4. ROBUST CDN STREAM PROXY PIPE
+// ==========================================
 app.get('/api/stream-proxy', async (req, res) => {
-  const { url, cookie } = req.query;
-  if (!url) return res.status(400).send('URL missing');
+  const { url, referer, cookie } = req.query;
+  if (!url) return res.status(400).send('URL is required');
 
   try {
+    const target = decodeURIComponent(url);
+    const domain = new URL(target).origin;
+    const ref = referer ? decodeURIComponent(referer) : domain;
+    const signCookie = cookie ? decodeURIComponent(cookie) : '';
+
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': '*/*',
+      'Accept-Encoding': 'identity'
+    };
+
+    if (signCookie) headers['Cookie'] = signCookie;
+    if (referer) {
+      headers['Referer'] = ref;
+      headers['Origin'] = ref.replace(/\/$/, '');
+    }
+
     const response = await axios({
       method: 'GET',
-      url: decodeURIComponent(url),
+      url: target,
       responseType: 'stream',
-      headers: {
-        'Cookie': cookie ? decodeURIComponent(cookie) : '',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      }
+      headers,
+      timeout: 25000
     });
 
     res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp4',
+      'Content-Type': response.headers['content-type'] || (target.includes('.mpd') ? 'application/dash+xml' : 'video/mp4'),
       'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes'
     });
 
     response.data.pipe(res);
-  } catch (err) {
-    res.status(500).send('Proxy error');
+  } catch (error) {
+    res.status(500).json({
+      error: 'Proxy Error',
+      status: error.response?.status || 500,
+      message: error.response?.statusText || error.message
+    });
   }
 });
 
