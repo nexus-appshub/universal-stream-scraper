@@ -52,12 +52,22 @@ async function getWarmBrowser() {
 
 getWarmBrowser().catch(() => {});
 
-function getWebProviderUrls(id, s = 1, e = 1, type = 'movie') {
-  const isTv = type === 'tv';
+// মুভি ও টিভি সিরিজের জন্য মাল্টি-প্রোভাইডার পুলে সঠিক ম্যাপিং
+function getWebProviderUrls(id, s = 1, e = 1, isTv = false) {
+  if (isTv) {
+    return [
+      `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}`,
+      `https://vidnest.fun/tv/${id}/${s}/${e}`,
+      `https://vidrock.net/embed/tv/${id}/${s}/${e}`,
+      `https://vidsrc.to/embed/tv/${id}/${s}/${e}`,
+      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${s}&episode=${e}`
+    ];
+  }
   return [
-    isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`,
-    isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`,
-    isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`
+    `https://player.autoembed.cc/embed/movie/${id}`,
+    `https://vidnest.fun/movie/${id}`,
+    `https://vidrock.net/embed/movie/${id}`,
+    `https://vidsrc.to/embed/movie/${id}`
   ];
 }
 
@@ -90,9 +100,11 @@ async function fastScrape(browser, targetUrl) {
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 9000 });
+      
+      // টিভি সিরিজের অটো-প্লে ও ফ্রেম ক্লিক ট্রিগার
       await page.evaluate(() => {
-        const btn = document.querySelector('video, button, #play, .play-btn');
+        const btn = document.querySelector('video, button, #play, .play-btn, .server-item');
         if (btn) btn.click();
       });
     } catch (e) {}
@@ -103,16 +115,27 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 5000);
+    }, 6000);
   });
 }
 
+// প্যারামিটার নরমালাইজার
+function normalizeParams(query) {
+  const targetId = query.id || query.subjectId || query.tmdbId || '27205';
+  const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
+  const isTv = typeStr === 'tv' || typeStr === 'series' || typeStr === 'show';
+  const season = query.s || query.season || query.se || 1;
+  const episode = query.e || query.episode || query.ep || 1;
+
+  return { targetId, isTv, season, episode, typeStr };
+}
+
 // ==========================================
-// ১. JSON রেজলভার API (যাতে ব্রাউজার সরাসরি Raw URL পায়)
+// ১. JSON রেজলভার API (TV + Movie Supported)
 // ==========================================
 app.get('/api/resolve-stream', async (req, res) => {
-  const { id = '27205', type = 'movie', s = 1, e = 1 } = req.query;
-  const cacheKey = `${id}_${type}_${s}_${e}`;
+  const { targetId, isTv, season, episode, typeStr } = normalizeParams(req.query);
+  const cacheKey = `${targetId}_${typeStr}_${season}_${episode}`;
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
   let streamUrl = null;
@@ -125,7 +148,7 @@ app.get('/api/resolve-stream', async (req, res) => {
   } else {
     try {
       const browser = await getWarmBrowser();
-      const urls = getWebProviderUrls(id, s, e, type);
+      const urls = getWebProviderUrls(targetId, season, episode, isTv);
 
       for (const url of urls) {
         streamUrl = await fastScrape(browser, url);
@@ -144,7 +167,7 @@ app.get('/api/resolve-stream', async (req, res) => {
   }
 
   if (!streamUrl) {
-    return res.status(404).json({ success: false, message: 'Stream Offline' });
+    return res.status(404).json({ success: false, message: 'TV Episode / Movie Stream Offline' });
   }
 
   const directProxiedUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(usedUrl)}`;
@@ -152,14 +175,17 @@ app.get('/api/resolve-stream', async (req, res) => {
     success: true,
     streamUrl: directProxiedUrl,
     rawUrl: streamUrl,
-    referer: usedUrl
+    referer: usedUrl,
+    isTv,
+    season,
+    episode
   });
 });
 
 // মেইন প্লে এন্ডপয়েন্ট
 app.get('/api/moviebox/play', async (req, res) => {
-  const { id = '27205', type = 'movie', s = 1, e = 1 } = req.query;
-  const cacheKey = `${id}_${type}_${s}_${e}`;
+  const { targetId, isTv, season, episode, typeStr } = normalizeParams(req.query);
+  const cacheKey = `${targetId}_${typeStr}_${season}_${episode}`;
 
   let streamUrl = null;
   let usedUrl = '';
@@ -171,7 +197,7 @@ app.get('/api/moviebox/play', async (req, res) => {
   } else {
     try {
       const browser = await getWarmBrowser();
-      const urls = getWebProviderUrls(id, s, e, type);
+      const urls = getWebProviderUrls(targetId, season, episode, isTv);
 
       for (const url of urls) {
         streamUrl = await fastScrape(browser, url);
@@ -255,7 +281,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Scraper Native Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 Scraper Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
