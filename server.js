@@ -1,190 +1,179 @@
 const express = require('express');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const crypto = require('crypto');
 const cors = require('cors');
 const axios = require('axios');
-
-puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. UNIVERSAL CDN / STREAM PROXY PIPE
+// 1. MOVIEBOX CRYPTOGRAPHIC SIGNATURE GENERATOR
 // ==========================================
-app.get('/api/stream-proxy', async (req, res) => {
-  const { url, referer, cookie } = req.query;
-  if (!url) return res.status(400).send('URL is required');
+const GATEWAY_SECRET = Buffer.from('76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O', 'utf-8');
 
-  try {
-    const target = decodeURIComponent(url);
-    const domain = new URL(target).origin;
-    const ref = referer ? decodeURIComponent(referer) : domain;
-    const signCookie = cookie ? decodeURIComponent(cookie) : '';
-
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    };
-
-    if (signCookie) headers['Cookie'] = signCookie;
-    if (referer) {
-      headers['Referer'] = ref;
-      headers['Origin'] = ref.replace(/\/$/, '');
-    }
-
-    const response = await axios({
-      method: 'GET',
-      url: target,
-      responseType: 'stream',
-      headers,
-      timeout: 20000
-    });
-
-    res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp4',
-      'Access-Control-Allow-Origin': '*',
-      'Accept-Ranges': 'bytes'
-    });
-
-    response.data.pipe(res);
-  } catch (error) {
-    res.status(500).json({ error: 'Stream Proxy Pipe Failed', message: error.message });
-  }
-});
-
-// ==========================================
-// 2. DIRECT MOVIE / STREAM PLAYER ROUTE
-// ==========================================
-function resolveProviderUrl(provider, id, s = 1, e = 1, type = 'movie') {
-  const isTv = type === 'tv';
-  switch (provider.toLowerCase()) {
-    case 'vidnest':
-      return isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`;
-    case 'vidrock':
-      return isTv ? `https://vidrock.net/embed/tv/${id}/${s}/${e}` : `https://vidrock.net/embed/movie/${id}`;
-    case 'vidsrc':
-    case 'vidsrc_to':
-      return isTv ? `https://vidsrc.to/embed/tv/${id}/${s}/${e}` : `https://vidsrc.to/embed/movie/${id}`;
-    case 'autoembed':
-      return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`;
-    default:
-      return isTv ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`;
-  }
+function generateClientToken() {
+  const ts = Date.now().toString();
+  const revTs = ts.split('').reverse().join('');
+  const hash = crypto.createHash('md5').update(revTs).digest('hex');
+  return `${ts},${hash}`;
 }
 
-// 🟢 ব্রাউজারে সরাসরি ভিডিও প্লে করার এন্ডপয়েন্ট
-app.get('/api/moviebox/play', async (req, res) => {
-  const { id = '550', provider = 'vidnest', type = 'movie', s = 1, e = 1 } = req.query;
+function generateTrSignature(method, path, queryParams = {}, body = '') {
+  const ts = Date.now().toString();
 
-  const targetUrl = resolveProviderUrl(provider, id, s, e, type);
-  let browser = null;
+  // ১. প্যারামিটার সর্টিং
+  const sortedKeys = Object.keys(queryParams).sort();
+  const queryString = sortedKeys.map(k => `${k}=${queryParams[k]}`).join('&');
+  const canonicalPathAndQuery = queryString ? `${path}?${queryString}` : path;
+
+  // ২. বডি MD5
+  let bodyMd5 = '';
+  if (body) {
+    const payloadStr = typeof body === 'object' ? JSON.stringify(body) : body.toString();
+    bodyMd5 = crypto.createHash('md5').update(payloadStr.slice(0, 102400)).digest('hex');
+  }
+
+  // ৩. ক্যানোনিকাল স্ট্রিং ফরম্যাট
+  const canonicalString = `${method.toUpperCase()}\n\n\n${body ? body.length : 0}\n${ts}\n${bodyMd5}\n${canonicalPathAndQuery}`;
+
+  // ৪. HMAC-MD5 সাইন
+  const hmac = crypto.createHmac('md5', GATEWAY_SECRET).update(canonicalString).digest('base64');
+  return `${ts}|2|${hmac}`;
+}
+
+const MBOX_HEADERS = {
+  'User-Agent': 'MovieBoxPro/16.2.1 (Android 12; Pixel 6)',
+  'X-M-Version': '16.2.1',
+  'X-Client-Status': '1',
+  'X-Play-Mode': 'stream',
+  'Accept': 'application/json'
+};
+
+let cachedMboxToken = null;
+
+async function getFreshMboxToken() {
+  if (cachedMboxToken) return cachedMboxToken;
+  try {
+    const path = '/wefeed-tv-bff/user/visitor-login';
+    const sig = generateTrSignature('POST', path);
+    const clientToken = generateClientToken();
+
+    const res = await axios.post(`https://tv.aoneroom.com${path}`, {}, {
+      headers: {
+        ...MBOX_HEADERS,
+        'X-Client-Token': clientToken,
+        'x-tr-signature': sig
+      },
+      timeout: 6000
+    });
+    if (res.data?.data?.token) {
+      cachedMboxToken = res.data.data.token;
+    }
+  } catch (err) {
+    cachedMboxToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjYwNDk1NjQ5MTA2NjkyMzIsImV4cCI6MTc5NTM1ODUwMn0.ZKkU5-K-Hw63EHFcgUQ';
+  }
+  return cachedMboxToken;
+}
+
+// ==========================================
+// 2. DIRECT MOVIEBOX STREAMING & PLAY ROUTE
+// ==========================================
+
+// 🟢 সরাসরি মুভি প্লে করার এন্ডপয়েন্ট (১০০% MovieBox Server)
+app.get('/api/moviebox/play', async (req, res) => {
+  let { subjectId = '8826677989518759008', title, se = 0, ep = 0 } = req.query;
 
   try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-web-security',
-        '--window-size=1920,1080'
-      ]
-    });
+    const token = await getFreshMboxToken();
 
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    );
+    // ১. নাম দিয়ে MovieBox-এ সার্চ করা
+    if (!subjectId && title) {
+      const searchPath = '/wefeed-tv-bff/search/result';
+      const searchParams = { keyword: title, page: 1, perPage: 10 };
+      const searchSig = generateTrSignature('GET', searchPath, searchParams);
 
-    let streamUrl = null;
+      const searchRes = await axios.get(`https://tv.aoneroom.com${searchPath}`, {
+        params: searchParams,
+        headers: {
+          ...MBOX_HEADERS,
+          'Authorization': `Bearer ${token}`,
+          'X-Client-Token': generateClientToken(),
+          'x-tr-signature': searchSig
+        }
+      });
 
-    page.on('response', async (response) => {
-      const u = response.url();
-      const isMedia = u.includes('.m3u8') || u.includes('/hls/') || u.includes('master.m3u8') || (u.includes('.mp4') && !u.includes('google'));
-      const isBlacklisted = u.includes('githubusercontent.com') || u.includes('analytics') || u.includes('doubleclick') || u.includes('demo-video.mp4');
-
-      if (isMedia && !isBlacklisted) {
-        streamUrl = u;
+      const items = searchRes.data?.data?.items || [];
+      if (items.length > 0) {
+        subjectId = items[0].subjectId;
+      } else {
+        return res.status(404).send(`Movie "${title}" not found on MovieBox`);
       }
-    });
-
-    try {
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-    } catch (err) {}
-
-    try {
-      const frames = page.frames();
-      for (const frame of frames) {
-        try {
-          const domSource = await frame.evaluate(() => {
-            const v = document.querySelector('video');
-            return v ? v.src : null;
-          });
-          if (domSource && domSource.startsWith('http') && !domSource.includes('demo-video.mp4')) {
-            streamUrl = domSource;
-            break;
-          }
-          await frame.evaluate(() => {
-            const els = document.querySelectorAll('video, button, #play, .play-btn, .art-video-player');
-            els.forEach(el => el.click && el.click());
-          });
-        } catch (fe) {}
-      }
-    } catch (err) {}
-
-    let waitTime = 0;
-    while (!streamUrl && waitTime < 10000) {
-      await new Promise(r => setTimeout(r, 500));
-      waitTime += 500;
     }
 
-    await browser.close();
+    // ২. প্লে-ইনফো ফেচ করা
+    const playPath = '/wefeed-tv-bff/subject/play-info';
+    const playParams = { subjectId, se, ep };
+    const playSig = generateTrSignature('GET', playPath, playParams);
 
-    if (!streamUrl) {
-      return res.status(404).send('Stream could not be captured. Please try another provider.');
+    const playRes = await axios.get(`https://tv.aoneroom.com${playPath}`, {
+      params: playParams,
+      headers: {
+        ...MBOX_HEADERS,
+        'Authorization': `Bearer ${token}`,
+        'X-Client-Token': generateClientToken(),
+        'x-tr-signature': playSig
+      },
+      timeout: 8000
+    });
+
+    const data = playRes.data?.data;
+    const mp4Url = data?.resources?.[0]?.url;
+    const dashUrl = data?.streams?.[0]?.url;
+    const signCookie = data?.streams?.[0]?.signCookie || '';
+    const videoTarget = mp4Url || dashUrl;
+
+    if (!videoTarget) {
+      return res.status(404).send('Movie stream not available on MovieBox servers');
     }
 
-    // সরাসরি স্ট্রিম প্রক্সি করে ব্রাউজারে ভিডিও প্লে শুরু করা
-    const proxyStreamResponse = await axios({
+    // ৩. ক্লাউডফ্রন্ট কুকি বাইপাস করে সরাসরি ব্রাউজার প্লেয়ারে পাইপ করা
+    const streamRes = await axios({
       method: 'GET',
-      url: streamUrl,
+      url: videoTarget,
       responseType: 'stream',
       headers: {
-        'Referer': targetUrl,
-        'Origin': new URL(targetUrl).origin,
+        'Cookie': signCookie,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      },
-      timeout: 15000
+      }
     });
 
     res.set({
-      'Content-Type': proxyStreamResponse.headers['content-type'] || 'video/mp4',
+      'Content-Type': streamRes.headers['content-type'] || 'video/mp4',
       'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes'
     });
 
-    proxyStreamResponse.data.pipe(res);
+    streamRes.data.pipe(res);
 
-  } catch (error) {
-    if (browser) await browser.close();
-    return res.status(500).send('Streaming error: ' + error.message);
+  } catch (err) {
+    res.status(500).send('MovieBox Direct Engine Error: ' + (err.response?.data?.message || err.message));
   }
 });
 
 // JSON API
-app.get('/api/get-stream', async (req, res) => {
-  const { provider = 'vidnest', id = '550', s = 1, e = 1, type = 'movie' } = req.query;
+app.get('/api/moviebox', async (req, res) => {
+  const { subjectId = '8826677989518759008', title } = req.query;
   const hostUrl = `${req.protocol}://${req.get('host')}`;
+  const param = title ? `title=${encodeURIComponent(title)}` : `subjectId=${subjectId}`;
   res.json({
     success: true,
-    directPlayUrl: `${hostUrl}/api/moviebox/play?id=${id}&provider=${provider}&type=${type}&s=${s}&e=${e}`
+    server: 'MovieBox Official Stream Engine',
+    streamUrl: `${hostUrl}/api/moviebox/play?${param}`
   });
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal Stream Scraper is Live & Healthy!'));
+app.get('/', (req, res) => res.send('⚡ MovieBox Official Native Stream Engine Active!'));
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Active on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 MovieBox Engine Active on port ${PORT}`));
