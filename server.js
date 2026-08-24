@@ -179,32 +179,23 @@ async function fastScrape(browser, targetUrl) {
 }
 
 // ========================================================
-// ★ নতুন যুক্ত: VIDSRC.SBS DEEP MULTI-LANG SCRAPER
-// (AwsPly, Nitro, VidHindi, VidEmd, Pro Multi অটো-ক্লিকার)
+// VIDSRC.SBS DEEP MULTI-LANG SCRAPER (FIXED NESTED IFRAMES)
 // ========================================================
 async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'Multi-Lang') {
   const page = await browser.newPage();
-  await page.setRequestInterception(true);
-
-  page.on('request', (req) => {
-    const type = req.resourceType();
-    const url = req.url();
-    if (['image', 'stylesheet', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick')) {
-      req.abort();
-    } else {
-      req.continue();
-    }
-  });
-
+  
+  // সম্পূর্ণ রিয়্যাল ব্রাউজার এনভায়রনমেন্ট সিমুলেশন
+  await page.setViewport({ width: 1280, height: 720 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
   return new Promise(async (resolve) => {
     let resolved = false;
 
+    // নেটওয়ার্ক ট্র্যাফিক থেকে সরাসরি মিডিয়া ক্যাচ করা
     page.on('response', async (response) => {
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
-      const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4');
+      const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
 
       if (isMedia && !isFake && !resolved) {
         resolved = true;
@@ -214,81 +205,63 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'Mult
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 12000 });
 
-      // ১. মেইন প্লে বাটনে ক্লিক
-      await page.evaluate(() => {
-        const playBtn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
-        if (playBtn) playBtn.click();
-      });
+      // ১. পেজের সব আইফ্রেম স্ক্যান করা
+      const clickInsideFrames = async () => {
+        const frames = page.frames();
+        for (const frame of frames) {
+          try {
+            // প্লে বাটন ক্লিক
+            await frame.evaluate(() => {
+              const playBtn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, #player');
+              if (playBtn) playBtn.click();
+            });
 
-      await new Promise((r) => setTimeout(r, 1200));
+            // সার্ভার লিস্ট ওপেন ও সিলেক্ট করা
+            await frame.evaluate((srvName) => {
+              const elements = Array.from(document.querySelectorAll('*'));
+              
+              // ড্রপডাউন বা সার্ভার মেনু ওপেন
+              const menuTrigger = elements.find(el => {
+                const txt = (el.innerText || el.textContent || '').trim();
+                return txt.includes('Pro Multi') || txt.includes('Server') || el.classList.contains('server-item');
+              });
+              if (menuTrigger) menuTrigger.click();
 
-      // ২. সার্ভার ড্রপডাউন/মেনু ওপেন করে টার্গেট সার্ভারে ক্লিক করা
-      await page.evaluate((srvName) => {
-        // সার্ভার মেনু বাটন খোলা (যেমন: Pro Multi, Server আইকন)
-        const serverDropdown = document.querySelector('.server-item, .dropdown-toggle, [class*="server"], [id*="server"]');
-        if (serverDropdown) serverDropdown.click();
-
-        // নির্দিষ্ট সার্ভার খোঁজা (AwsPly, Nitro, VidHindi, VidEmd, etc.)
-        const elements = Array.from(document.querySelectorAll('div, li, button, span, a'));
-        const matched = elements.find((el) => {
-          const text = (el.innerText || el.textContent || '').trim();
-          return (
-            text.toLowerCase().includes(srvName.toLowerCase()) ||
-            text.includes('Multi-Lang') ||
-            text.includes('AwsPly') ||
-            text.includes('Nitro') ||
-            text.includes('VidHindi')
-          );
-        });
-
-        if (matched) {
-          matched.click();
+              // টার্গেট সার্ভারে ক্লিক (যেমন: AwsPly, Nitro, VidHindi)
+              const target = elements.find(el => {
+                const txt = (el.innerText || el.textContent || '').trim();
+                return (
+                  txt.toLowerCase().includes(srvName.toLowerCase()) ||
+                  txt.includes('Multi-Lang') ||
+                  txt.includes('AwsPly') ||
+                  txt.includes('Nitro') ||
+                  txt.includes('VidHindi')
+                );
+              });
+              if (target) target.click();
+            }, preferredServer);
+          } catch (e) {}
         }
-      }, preferredServer);
+      };
 
-      // ৩. আইফ্রেমের ভেতরে স্বয়ংক্রিয় প্লেয়ার ক্লিক
-      const frames = page.frames();
-      for (const frame of frames) {
-        await frame
-          .evaluate((srvName) => {
-            const b = document.querySelector('video, button, #play, .play-btn');
-            if (b) b.click();
+      await clickInsideFrames();
+      await new Promise(r => setTimeout(r, 1500));
+      await clickInsideFrames();
 
-            const items = Array.from(document.querySelectorAll('div, li, button, span'));
-            const s = items.find((e) => (e.innerText || '').includes(srvName) || (e.innerText || '').includes('Multi-Lang'));
-            if (s) s.click();
-          }, preferredServer)
-          .catch(() => {});
-      }
     } catch (e) {}
 
+    // টাইমআউট হ্যান্ডলার
     setTimeout(async () => {
       if (!resolved) {
         resolved = true;
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 7000);
+    }, 8000);
   });
 }
-
-function parseParams(query) {
-  const targetId = query.id || query.tmdbId || '27205';
-  const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
-  const title = query.title || '';
-  const isTv = typeStr === 'tv' || typeStr === 'series' || typeStr === 'anime';
-  const season = parseInt(query.s || query.season || query.se || 1);
-  const episode = parseInt(query.e || query.episode || query.ep || 1);
-  const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
-  const malId = query.mal_id || query.malId;
-  const anilistId = query.anilist_id || query.anilistId;
-  const server = query.server || 'Multi-Lang';
-
-  return { id: targetId, typeStr, isTv, season, episode, lang, malId, anilistId, title, server };
-}
-
 // ========================================================
 // ৩. JSON RESOLVER API (বিদ্যমান কোড অপরিবর্তিত)
 // ========================================================
