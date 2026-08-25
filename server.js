@@ -12,7 +12,28 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
+// ========================================================
+// সিকিউরিটি: অনুমোদিত ডোমেইন তালিকা (Anti-Hotlink Guard)
+// ========================================================
+const ALLOWED_ORIGINS = [
+  'https://homeairtv.xubilaswebdevcorp.shop',
+  'https://anime.hmair.xyz',
+  'http://localhost:3000',
+  'http://localhost:5173'
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // মোবাইল অ্যাপ ও পোস্টম্যানের ক্ষেত্রে origin খালি থাকতে পারে
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
+      return callback(null, true);
+    }
+    return callback(new Error('Access Denied: Hotlinking Prohibited'));
+  },
+  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+  allowedHeaders: '*'
+}));
+
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -26,7 +47,7 @@ app.use((req, res, next) => {
 const streamCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 
-// সমসাময়িক রিকোয়েস্ট লকার (একই টাইটেলে মাল্টিপল ব্রাউজার ওপেন বন্ধ রাখার জন্য)
+// কনকারেন্সি লকার
 const pendingScrapes = new Map();
 
 let globalBrowser = null;
@@ -295,7 +316,6 @@ app.get('/api/resolve-stream', async (req, res) => {
 
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
-  // ১. মেমোরি ক্যাশ হিট চেক (মিলিসেকেন্ড রেসপন্স)
   if (streamCache.has(cacheKey)) {
     const cached = streamCache.get(cacheKey);
     return res.json({
@@ -307,7 +327,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // ২. কনকারেন্সি লকার (একই টাইটেলের জন্য মাত্র ১টি ব্রাউজার সেশন ওপেন হবে)
   if (pendingScrapes.has(cacheKey)) {
     try {
       const result = await pendingScrapes.get(cacheKey);
@@ -323,7 +342,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     } catch (e) {}
   }
 
-  // ৩. নতুন স্ক্র্যাপ টাস্ক
   const scrapeTask = (async () => {
     try {
       const browser = await getWarmBrowser();
@@ -424,41 +442,43 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
   }
 });
 
-// টানেল হ্যান্ডলার
-app.get('/api/moviebox/play', async (req, res) => {
-  const params = parseParams(req.query);
-  if (params.lang === 'dub') {
-    const dubEmbed = await resolveDubStream(params);
-    return res.redirect(dubEmbed);
-  }
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-  const cached = streamCache.get(cacheKey);
-  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
-  return res.status(404).send('Stream Offline');
-});
-
+// ========================================================
+// ৬. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও হটলিস্ট ফিক্স)
+// ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
-    const domain = new URL(targetUrl).origin;
-    const ref = referer || domain;
+    let cleanUrl = targetUrl;
+    // ডাবল এনকোডেড ক্লাউডফ্লেয়ার ওয়ার্কার লিংক ফিক্স
+    while (cleanUrl.includes('%3A') || cleanUrl.includes('%2F')) {
+      try {
+        const decoded = decodeURIComponent(cleanUrl);
+        if (decoded === cleanUrl) break;
+        cleanUrl = decoded;
+      } catch (e) {
+        break;
+      }
+    }
+
+    const domain = new URL(cleanUrl).origin;
+    const ref = referer ? decodeURIComponent(referer) : domain;
     const protocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.get('host');
     const proxyBase = `${protocol}://${host}/api/stream-proxy`;
 
     const response = await axios({
       method: 'GET',
-      url: targetUrl,
-      responseType: targetUrl.includes('.m3u8') ? 'text' : 'stream',
+      url: cleanUrl,
+      responseType: cleanUrl.includes('.m3u8') ? 'text' : 'stream',
       headers: {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
       },
-      timeout: 15000
+      timeout: 20000
     });
 
-    if (targetUrl.includes('.m3u8')) {
-      const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
+    if (cleanUrl.includes('.m3u8')) {
+      const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
 
       const rewritten = lines.map(line => {
@@ -488,17 +508,42 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
     response.data.pipe(res);
   } catch (error) {
-    res.status(500).send('Stream Tunnel Error');
+    res.status(502).send('Stream Tunnel Error');
   }
 }
 
 app.get('/api/stream-proxy', async (req, res) => {
+  const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
+  
+  // ব্রাউজার হটলিংক প্রটেকশন (অননুমোদিত ডোমেইন ব্লক)
+  const isAuthorized = 
+    !refererHeader || 
+    ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
+    refererHeader.includes('xubilas') ||
+    refererHeader.includes('hmair');
+
+  if (!isAuthorized) {
+    return res.status(403).json({ error: 'Access Denied: Hotlinking is not allowed.' });
+  }
+
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online!'));
+app.get('/api/moviebox/play', async (req, res) => {
+  const params = parseParams(req.query);
+  if (params.lang === 'dub') {
+    const dubEmbed = await resolveDubStream(params);
+    return res.redirect(dubEmbed);
+  }
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  const cached = streamCache.get(cacheKey);
+  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  return res.status(404).send('Stream Offline');
+});
+
+app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper & Anti-Hotlink Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
