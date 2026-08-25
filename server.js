@@ -23,12 +23,12 @@ app.use((req, res, next) => {
 
 const streamCache = new Map();
 const activeResolutions = new Map();
-let clusterBrowser = null;
+let globalBrowser = null;
 
-async function getClusterBrowser() {
-  if (clusterBrowser && clusterBrowser.isConnected()) return clusterBrowser;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-cluster-'));
-  clusterBrowser = await puppeteer.launch({
+async function getBrowserInstance() {
+  if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-runner-'));
+  globalBrowser = await puppeteer.launch({
     headless: 'new',
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     userDataDir: tempDir,
@@ -38,87 +38,75 @@ async function getClusterBrowser() {
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--no-zygote',
-      '--single-process',
-      '--disable-extensions',
-      '--blink-settings=imagesEnabled=false',
-      '--disable-remote-fonts'
+      '--disable-extensions'
     ]
   });
-  return clusterBrowser;
+  return globalBrowser;
 }
-getClusterBrowser().catch(() => {});
+getBrowserInstance().catch(() => {});
 
-function getGlobalProviders(params) {
+function getScrapeEndpoints(params) {
   const { id, isTv, season, episode } = params;
   if (isTv) {
     return [
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
       `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
       `https://vidlink.pro/tv/${id}/${season}/${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
-      `https://player.videasy.net/tv/${id}/${season}/${episode}`
+      `https://player.videasy.net/tv/${id}/${season}/${episode}`,
+      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
     ];
   }
   return [
     `https://vidnest.fun/movie/${id}`,
     `https://vidsrc.sbs/embed/movie/${id}`,
     `https://vidlink.pro/movie/${id}`,
-    `https://vidrock.net/embed/movie/${id}`,
-    `https://player.videasy.net/movie/${id}`
+    `https://player.videasy.net/movie/${id}`,
+    `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
+    `https://vidrock.net/embed/movie/${id}`
   ];
 }
 
-async function scrapeSingleUrl(browser, targetUrl) {
+async function scrapeProvider(browser, targetUrl) {
   let page = null;
   try {
     page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 720 });
-    await page.setRequestInterception(true);
-    
-    page.on('request', (req) => {
-      const type = req.resourceType();
-      const url = req.url().toLowerCase();
-      if (['image', 'font'].includes(type) || url.includes('google-analytics') || url.includes('doubleclick')) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
 
     return await new Promise((resolve) => {
       let resolved = false;
 
       page.on('response', async (response) => {
-        const u = response.url();
-        const lowerU = u.toLowerCase();
-        const isMedia = (lowerU.includes('.m3u8') || lowerU.includes('/hls/') || (lowerU.includes('.mp4') && !lowerU.includes('google'))) &&
-          !lowerU.includes('demo') && !lowerU.includes('trailer') && !lowerU.includes('preview');
+        try {
+          const u = response.url();
+          const lower = u.toLowerCase();
+          const isMedia = (lower.includes('.m3u8') || lower.includes('/hls/') || (lower.includes('.mp4') && !lower.includes('google'))) &&
+                          !lower.includes('demo') && !lower.includes('trailer') && !lower.includes('preview');
 
-        if (isMedia && !resolved) {
-          resolved = true;
-          await page.close().catch(() => {});
-          resolve({ streamUrl: u, usedUrl: targetUrl });
-        }
+          if (isMedia && !resolved) {
+            resolved = true;
+            await page.close().catch(() => {});
+            resolve({ streamUrl: u, usedUrl: targetUrl });
+          }
+        } catch (e) {}
       });
 
       page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 })
         .then(async () => {
-          const clickPlayers = async () => {
+          for (let i = 0; i < 3; i++) {
+            if (resolved) break;
             const frames = [page.mainFrame(), ...page.frames()];
             for (const frame of frames) {
               try {
                 await frame.evaluate(() => {
                   const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
-                  if (elements.length > 0) elements[0].click();
+                  elements.forEach(el => el.click());
                 });
               } catch (e) {}
             }
-          };
-          await clickPlayers();
-          await new Promise(r => setTimeout(r, 1200));
-          await clickPlayers();
+            await new Promise(r => setTimeout(r, 1000));
+          }
         })
         .catch(() => {});
 
@@ -128,7 +116,7 @@ async function scrapeSingleUrl(browser, targetUrl) {
           await page.close().catch(() => {});
           resolve(null);
         }
-      }, 7000);
+      }, 7500);
     });
   } catch (err) {
     if (page) await page.close().catch(() => {});
@@ -136,10 +124,10 @@ async function scrapeSingleUrl(browser, targetUrl) {
   }
 }
 
-async function scrapeAllProviders(browser, urls) {
+async function executeScrapePipeline(browser, urls) {
   for (const url of urls) {
-    const res = await scrapeSingleUrl(browser, url);
-    if (res && res.streamUrl) return res;
+    const result = await scrapeProvider(browser, url);
+    if (result && result.streamUrl) return result;
   }
   return null;
 }
@@ -155,7 +143,7 @@ function parseParams(query) {
   return { id: targetId, typeStr, isTv, season, episode, lang, title };
 }
 
-// ১. মেইন রেজলভার JSON API
+// ১. মেইন JSON রেজলভার API
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
@@ -189,9 +177,9 @@ app.get('/api/resolve-stream', async (req, res) => {
 
   const scrapeTask = (async () => {
     try {
-      const browser = await getClusterBrowser();
-      const urls = getGlobalProviders(params);
-      const result = await scrapeAllProviders(browser, urls);
+      const browser = await getBrowserInstance();
+      const urls = getScrapeEndpoints(params);
+      const result = await executeScrapePipeline(browser, urls);
       if (result) {
         const data = { url: result.streamUrl, ref: result.usedUrl, time: Date.now() };
         streamCache.set(cacheKey, data);
@@ -224,7 +212,7 @@ app.get('/api/resolve-stream', async (req, res) => {
   });
 });
 
-// ২. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
+// ২. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
@@ -235,9 +223,9 @@ app.get('/api/moviebox/play', async (req, res) => {
   }
 
   try {
-    const browser = await getClusterBrowser();
-    const urls = getGlobalProviders(params);
-    const result = await scrapeAllProviders(browser, urls);
+    const browser = await getBrowserInstance();
+    const urls = getScrapeEndpoints(params);
+    const result = await executeScrapePipeline(browser, urls);
     if (result) {
       streamCache.set(cacheKey, { url: result.streamUrl, ref: result.usedUrl, time: Date.now() });
       return pipeMediaTunnel(req, res, result.streamUrl, result.usedUrl);
@@ -247,7 +235,7 @@ app.get('/api/moviebox/play', async (req, res) => {
   return res.status(404).send('Stream Offline');
 });
 
-// ৩. সেগমেন্ট প্রক্সি টানেল
+// ৩. সেফ মিডিয়া টানেল প্রক্সি (হটলিংক গার্ড ও সেগমেন্ট ডিকোড)
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     let cleanUrl = targetUrl;
