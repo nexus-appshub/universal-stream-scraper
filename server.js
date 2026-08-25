@@ -83,7 +83,7 @@ async function getClusterBrowser() {
 getClusterBrowser().catch(() => {});
 
 // ============================================================================
-// ৩. ডাইনামিক প্রোভাইডার তালিকা
+// ৩. অ্যানিমে ও টিভি সিরিজের জন্য গ্লোবাল প্রোভাইডার তালিকা
 // ============================================================================
 function getGlobalProviders(params) {
   const { id, isTv, season, episode } = params;
@@ -196,23 +196,6 @@ async function raceAllProviders(browser, providers) {
   return null;
 }
 
-// ============================================================================
-// ৬. ডাব ও অ্যানিমে রেজলভার
-// ============================================================================
-async function resolveAnimeOrDub(params) {
-  const { id, episode = 1, season = 1 } = params;
-  try {
-    const res = await axios.get(`https://anikotoapi.site/series/${id}`, { timeout: 3500 });
-    const episodes = res.data?.episodes || res.data?.data?.episodes;
-    if (episodes && episodes.length > 0) {
-      const ep = episodes.find(e => Number(e.number) === Number(episode)) || episodes[episode - 1] || episodes[0];
-      const embedId = ep?.episode_embed_id || ep?.id;
-      if (embedId) return `https://megaplay.buzz/stream/s-2/${embedId}/dub`;
-    }
-  } catch (e) {}
-  return `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}?dub=1`;
-}
-
 function parseParams(query) {
   const targetId = query.id || query.tmdbId || '27205';
   const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
@@ -226,28 +209,15 @@ function parseParams(query) {
 }
 
 // ============================================================================
-// ৭. মেইন রেজলভার API
+// ৬. মেইন রেজলভার API (অ্যানিমে এবং টিভি সিরিজ সরাসরি স্ক্র্যাপ করবে)
 // ============================================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
-  if (params.lang === 'dub') {
-    const dubUrl = await resolveAnimeOrDub(params);
-    return res.json({
-      success: true,
-      isEmbed: true,
-      streamUrl: dubUrl,
-      embedUrl: dubUrl,
-      lang: 'dub',
-      type: params.typeStr,
-      season: params.season,
-      episode: params.episode
-    });
-  }
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
 
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-
+  // ১. মেমোরি ক্যাশ হিট চেক
   if (memoryCache.has(cacheKey)) {
     const cached = memoryCache.get(cacheKey);
     return res.json({
@@ -260,6 +230,7 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
+  // ২. কনকারেন্সি লকার
   if (activeResolutions.has(cacheKey)) {
     try {
       const result = await activeResolutions.get(cacheKey);
@@ -276,6 +247,7 @@ app.get('/api/resolve-stream', async (req, res) => {
     } catch (e) {}
   }
 
+  // ৩. লাইভ প্যারালাল স্ক্র্যাপিং (অ্যানিমে ও মুভির জন্য সরাসরি .m3u8 খুঁজবে)
   const scrapeTask = (async () => {
     try {
       const browser = await getClusterBrowser();
@@ -308,6 +280,7 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
+  // ৪. কোনো প্রোভাইডারে মিডিয়া স্ট্রিম না পেলে সেফ এম্বেড
   const fallbackEmbed = params.isTv 
     ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
     : `https://vidsrc.sbs/embed/movie/${params.id}`;
@@ -322,7 +295,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ============================================================================
-// ৮. ফুল ডিপ-লেভেল HLS মাস্টার ও সেগমেন্ট প্রক্সি টানেল (100% বাফারিং ফিক্স)
+// ৭. ফুল ডিপ-লেভেল HLS মাস্টার ও সেগমেন্ট প্রক্সি টানেল
 // ============================================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -369,7 +342,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         const trimmed = line.trim();
         if (!trimmed) return line;
 
-        // এনক্রিপশন কী ও সাব-ম্যানিফেস্ট URI হ্যান্ডলিং (#EXT-X-KEY:METHOD=AES-128,URI="...")
         if (trimmed.startsWith('#')) {
           if (trimmed.includes('URI="')) {
             return line.replace(/URI="([^"]+)"/g, (match, p1) => {
@@ -387,7 +359,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
           return line;
         }
 
-        // সব মিডিয়া সেগমেন্ট (.ts, .m4s, .aac) এবং সাব-প্লেলিস্ট (.m3u8) প্রক্সির মাধ্যমে রুট করা
         try {
           let segmentUrl = trimmed;
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
@@ -407,7 +378,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       return res.send(rewritten);
     }
 
-    // ডাইরেক্ট বাইনারি ভিডিও স্ট্রিম (.ts / .mp4 চাঙ্ক)
     res.set({
       'Content-Type': response.headers['content-type'] || 'video/mp2t',
       'Access-Control-Allow-Origin': '*',
@@ -442,11 +412,11 @@ app.get('/api/stream-proxy', async (req, res) => {
 });
 
 // ============================================================================
-// ৯. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
+// ৮. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
 // ============================================================================
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
   let cached = memoryCache.get(cacheKey);
 
   if (cached) {
