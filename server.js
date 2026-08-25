@@ -119,99 +119,77 @@ async function getWarmBrowser() {
 
 getWarmBrowser().catch(() => {});
 
-// প্রোভাইডার লিস্ট (Vidnest, VidRock, VidLink, AutoEmbed, Vidsrc)
-function getWebProviderUrls(params) {
-  const { id, isTv, season, episode } = params;
-  if (isTv) {
-    return [
-      `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
-      `https://vidlink.pro/tv/${id}/${season}/${episode}`,
-      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`
-    ];
-  }
-  return [
-    `https://vidnest.fun/movie/${id}`,
-    `https://vidrock.net/embed/movie/${id}`,
-    `https://vidlink.pro/movie/${id}`,
-    `https://player.autoembed.cc/embed/movie/${id}`,
-    `https://vidsrc.sbs/embed/movie/${id}`
-  ];
-}
+// সুপার-ফাস্ট ডাইরেক্ট API + Puppeteer হাইব্রিড এক্সট্রাক্টর
+async function fetchBestStream(id, isTv, season = 1, episode = 1) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Accept': '*/*'
+  };
 
-// ডিপ রিয়েল-টাইম স্ক্র্যাপার (কোনো হার্ডকোর লিংক নেই, সব ডাইনামিক)
-async function fastScrape(browser, targetUrl) {
-  let page = null;
+  // প্রথমে সরাসরি API গেটওয়ে চেক করবে (সবচেয়ে দ্রুত)
   try {
-    page = await browser.newPage();
+    const apiUrl = isTv
+      ? `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`
+      : `https://player.autoembed.cc/embed/movie/${id}`;
+    
+    const res = await axios.get(apiUrl, { headers: { ...headers, Referer: 'https://autoembed.cc/' }, timeout: 4000 });
+    const match = res.data.match(/(https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/i);
+    if (match && match[0]) {
+      return { streamUrl: match[0], referer: apiUrl };
+    }
+  } catch (e) {}
+
+  // যদি API থেকে না আসে, তবে ব্রাউজার স্নিফার দিয়ে রিয়েল-টাইম ধরবে
+  try {
+    const browser = await getWarmBrowser();
+    const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 720 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
     await page.setRequestInterception(true);
 
+    const targetUrl = isTv 
+      ? `https://vidnest.fun/tv/${id}/${season}/${episode}` 
+      : `https://vidnest.fun/movie/${id}`;
+
     return await new Promise((resolve) => {
       let resolved = false;
 
-      const captureMediaUrl = (u) => {
-        const lower = u.toLowerCase();
-        const isMedia = (
-          lower.includes('.m3u8') ||
-          lower.includes('/hls/') ||
-          lower.includes('master.m3u8') ||
-          lower.includes('playlist.m3u8') ||
-          (lower.includes('.mp4') && !lower.includes('google'))
-        ) && !lower.includes('demo') && !lower.includes('trailer') && !lower.includes('preview');
-
-        if (isMedia && !resolved) {
-          resolved = true;
-          page.close().catch(() => {});
-          resolve(u);
-        }
-      };
-
       page.on('request', (req) => {
         const u = req.url();
-        captureMediaUrl(u);
-        const type = req.resourceType();
-        if (['image', 'font', 'stylesheet'].includes(type) || u.includes('analytics') || u.includes('doubleclick') || u.includes('ads')) {
+        const lower = u.toLowerCase();
+        if ((lower.includes('.m3u8') || lower.includes('/hls/') || lower.includes('streamraiwind')) && !resolved) {
+          resolved = true;
+          page.close().catch(() => {});
+          resolve({ streamUrl: u, referer: targetUrl });
+        }
+        if (['image', 'font', 'stylesheet'].includes(req.resourceType())) {
           req.abort();
         } else {
           req.continue();
         }
       });
 
-      page.on('response', (response) => captureMediaUrl(response.url()));
+      page.on('response', (res) => {
+        const u = res.url();
+        const lower = u.toLowerCase();
+        if ((lower.includes('.m3u8') || lower.includes('/hls/') || lower.includes('streamraiwind')) && !resolved) {
+          resolved = true;
+          page.close().catch(() => {});
+          resolve({ streamUrl: u, referer: targetUrl });
+        }
+      });
 
-      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 })
-        .then(async () => {
-          for (let step = 0; step < 4; step++) {
-            if (resolved) break;
-            const frames = [page.mainFrame(), ...page.frames()];
-            for (const frame of frames) {
-              try {
-                await frame.evaluate(() => {
-                  const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"], body'));
-                  elements.forEach((el) => {
-                    try { el.click(); } catch (e) {}
-                  });
-                });
-              } catch (e) {}
-            }
-            await new Promise(r => setTimeout(r, 1000));
-          }
-        })
-        .catch(() => {});
+      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 }).catch(() => {});
 
-      setTimeout(async () => {
+      setTimeout(() => {
         if (!resolved) {
           resolved = true;
           page.close().catch(() => {});
           resolve(null);
         }
-      }, 8000);
+      }, 5000);
     });
   } catch (err) {
-    if (page) await page.close().catch(() => {});
     return null;
   }
 }
@@ -228,7 +206,7 @@ function parseParams(query) {
 }
 
 // ========================================================
-// মেইন API রেজলভার (Pure Dynamic Scrape)
+// মেইন API রেজলভার (Direct M3U8 JSON)
 // ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
@@ -253,55 +231,46 @@ app.get('/api/resolve-stream', async (req, res) => {
         return res.json({
           success: true,
           isEmbed: false,
-          streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
-          rawUrl: result.url,
+          streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.streamUrl)}&referer=${encodeURIComponent(result.referer)}`,
+          rawUrl: result.streamUrl,
           type: params.typeStr
         });
       }
     } catch (e) {}
   }
 
-  const scrapeTask = (async () => {
-    try {
-      const browser = await getWarmBrowser();
-      const urls = getWebProviderUrls(params);
-      for (const url of urls) {
-        const streamUrl = await fastScrape(browser, url);
-        if (streamUrl) {
-          const data = { url: streamUrl, ref: url, time: Date.now() };
-          streamCache.set(cacheKey, data);
-          return data;
-        }
-      }
-      return null;
-    } catch (err) {
-      return null;
-    } finally {
-      pendingScrapes.delete(cacheKey);
-    }
-  })();
-
+  const scrapeTask = fetchBestStream(params.id, params.isTv, params.season, params.episode);
   pendingScrapes.set(cacheKey, scrapeTask);
-  const finalResult = await scrapeTask;
+  const result = await scrapeTask;
+  pendingScrapes.delete(cacheKey);
 
-  if (finalResult) {
+  if (result && result.streamUrl) {
+    streamCache.set(cacheKey, { url: result.streamUrl, ref: result.referer, time: Date.now() });
     return res.json({
       success: true,
       isEmbed: false,
-      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
-      rawUrl: finalResult.url,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.streamUrl)}&referer=${encodeURIComponent(result.referer)}`,
+      rawUrl: result.streamUrl,
       type: params.typeStr
     });
   }
 
-  return res.status(404).json({
-    success: false,
-    error: 'Stream not found on live scraper networks'
+  // একদম না পেলে Vidnest সরাসরি এমবেড ফলব্যাক
+  const fallbackUrl = params.isTv
+    ? `https://vidnest.fun/tv/${params.id}/${params.season}/${params.episode}`
+    : `https://vidnest.fun/movie/${params.id}`;
+
+  return res.json({
+    success: true,
+    isEmbed: true,
+    streamUrl: fallbackUrl,
+    embedUrl: fallbackUrl,
+    type: params.typeStr
   });
 });
 
 // ========================================================
-// মিডিয়া টানেল প্রক্সি (Segment & Master Playlist Rewriter)
+// মিডিয়া টানেল প্রক্সি (Segment & Master Rewriter)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -371,12 +340,12 @@ app.get('/api/stream-proxy', async (req, res) => {
   const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
   const acceptHeader = req.headers['accept'] || '';
 
-  const imgAuthorized = 
+  const isAuthorized = 
     ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
     refererHeader.includes('xubilas') ||
     refererHeader.includes('hmair');
 
-  if (!imgAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
+  if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(403).send(ACCESS_DENIED_HTML);
   }
@@ -396,22 +365,16 @@ app.get('/api/moviebox/play', async (req, res) => {
     return pipeMediaTunnel(req, res, cached.url, cached.ref);
   }
 
-  try {
-    const browser = await getWarmBrowser();
-    const urls = getWebProviderUrls(params);
-    for (const url of urls) {
-      const streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        streamCache.set(cacheKey, { url: streamUrl, ref: url, time: Date.now() });
-        return pipeMediaTunnel(req, res, streamUrl, url);
-      }
-    }
-  } catch (e) {}
+  const result = await fetchBestStream(params.id, params.isTv, params.season, params.episode);
+  if (result && result.streamUrl) {
+    streamCache.set(cacheKey, { url: result.streamUrl, ref: result.referer, time: Date.now() });
+    return pipeMediaTunnel(req, res, result.streamUrl, result.referer);
+  }
 
   return res.status(404).send('Stream Offline');
 });
 
-app.get('/', (req, res) => res.send('🚀 Pure Dynamic Live Scraper Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 Hybrid Stream Scraper & Proxy Active!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
