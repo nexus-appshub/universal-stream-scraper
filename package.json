@@ -1,18 +1,18 @@
 {
-  "name": "universal-stream-scraper",
-  "version": "1.0.0",
-  "description": "Universal Media Stream Scraper Engine",
+  "name": "universal-ultra-scraper-core",
+  "version": "5.0.0",
+  "description": "Next-Gen Distributed Streaming Scraper & Media Pipeline",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.7.2",
-    "cors": "^2.8.5",
     "express": "^4.19.2",
-    "puppeteer": "^22.10.0",
+    "cors": "^2.8.5",
+    "axios": "^1.7.2",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "crypto-js": "^4.2.0"
   },
   "engines": {
     "node": ">=18.0.0"
