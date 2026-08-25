@@ -298,7 +298,7 @@ async function getAnimeExternalIds(title = '') {
 }
 
 async function resolveDubStream(params) {
-  const { id, episode = 1, title, malId: paramMal, anilistId: paramAni } = params;
+  const { id, episode = 1, title, malId: paramMal, anilistId: paramAni, season = 1 } = params;
   let malId = paramMal;
   let anilistId = paramAni;
 
@@ -308,7 +308,6 @@ async function resolveDubStream(params) {
     anilistId = ext.anilistId;
   }
 
-  // MAL / AniList Endpoint (DUB Only)
   if (malId) return `https://megaplay.buzz/stream/mal/${malId}/${episode}/dub`;
   if (anilistId) return `https://megaplay.buzz/stream/ani/${anilistId}/${episode}/dub`;
 
@@ -322,7 +321,7 @@ async function resolveDubStream(params) {
     }
   } catch (e) {}
 
-  return `https://vidsrc.sbs/embed/tv/${id}/${params.season}/${episode}?dub=1`;
+  return `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}?dub=1`;
 }
 
 // ========================================================
@@ -350,13 +349,16 @@ function getWebProviderUrls(params) {
   ];
 }
 
+// ৩. হাইপার-অপ্টিমাইজড ফাস্ট স্ক্র্যাপার (সব এপিসোড ক্যাপচার নিশ্চিত করবে)
 async function fastScrape(browser, targetUrl) {
   const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
   await page.setRequestInterception(true);
+  
   page.on('request', (req) => {
     const type = req.resourceType();
     const url = req.url();
-    if (['image', 'stylesheet', 'font', 'media'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
+    if (['image', 'stylesheet', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
       req.abort();
     } else {
       req.continue();
@@ -381,11 +383,27 @@ async function fastScrape(browser, targetUrl) {
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
-      await page.evaluate(() => {
-        const btn = document.querySelector('video, button, #play, .play-btn');
-        if (btn) btn.click();
-      });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 9000 });
+
+      // মাল্টি-লেয়ার ক্লিক ট্রিগার (যাতে কোনো এপিসোডের প্লে বাটন মিস না হয়)
+      const triggerPlay = async () => {
+        const frames = [page.mainFrame(), ...page.frames()];
+        for (const frame of frames) {
+          try {
+            await frame.evaluate(() => {
+              const buttons = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
+              if (buttons.length > 0) {
+                buttons[0].click();
+              }
+            });
+          } catch (e) {}
+        }
+      };
+
+      await triggerPlay();
+      await new Promise(r => setTimeout(r, 1000));
+      await triggerPlay();
+
     } catch (e) {}
 
     setTimeout(async () => {
@@ -394,12 +412,12 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 4500);
+    }, 5500);
   });
 }
 
 // ========================================================
-// ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
+// ৪. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
 // ========================================================
 async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsPly') {
   const page = await browser.newPage();
@@ -488,7 +506,7 @@ function parseParams(query) {
 }
 
 // ========================================================
-// ৪. মেইন JSON RESOLVER API (HIGH TRAFFIC OPTIMIZED)
+// ৫. মেইন JSON RESOLVER API
 // ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
@@ -584,7 +602,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ========================================================
-// ৫. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
+// ৬. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
 // ========================================================
 app.get('/api/vidsrc/scrape', async (req, res) => {
   const params = parseParams(req.query);
@@ -637,7 +655,7 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
 });
 
 // ========================================================
-// ৬. সেফ মিডিয়া টানেল প্রক্সি (কাস্টম Access Denied HTML সহ)
+// ৭. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও লাইভ পাইপিং)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -709,13 +727,11 @@ app.get('/api/stream-proxy', async (req, res) => {
   const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
   const acceptHeader = req.headers['accept'] || '';
 
-  // ব্রাউজার হটলিংক প্রটেকশন (অননুমোদিত ডোমেইন চেক)
   const isAuthorized = 
     ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
     refererHeader.includes('xubilas') ||
     refererHeader.includes('hmair');
 
-  // যদি সরাসরি ব্রাউজারে লিংক ওপেন করে বা অন্য সাইট থেকে চেষ্টা করে, তাহলে কাস্টম HTML পেজ দেখাবে
   if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(403).send(ACCESS_DENIED_HTML);
@@ -726,15 +742,34 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
+// ৮. MovieBox Native Play Endpoint (ক্যাশ মিস হলে অটো-স্ক্র্যাপ সাপোর্ট)
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
   if (params.lang === 'dub') {
     const dubEmbed = await resolveDubStream(params);
     return res.redirect(dubEmbed);
   }
+
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-  const cached = streamCache.get(cacheKey);
-  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  let cached = streamCache.get(cacheKey);
+
+  if (cached) {
+    return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  }
+
+  // ক্যাশে না থাকলে ইনস্ট্যান্ট ব্যাকগ্রাউন্ড স্ক্র্যাপ
+  try {
+    const browser = await getWarmBrowser();
+    const urls = getWebProviderUrls(params);
+    for (const url of urls) {
+      const streamUrl = await fastScrape(browser, url);
+      if (streamUrl) {
+        streamCache.set(cacheKey, { url: streamUrl, ref: url, time: Date.now() });
+        return pipeMediaTunnel(req, res, streamUrl, url);
+      }
+    }
+  } catch (e) {}
+
   return res.status(404).send('Stream Offline');
 });
 
