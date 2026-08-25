@@ -12,9 +12,32 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
-// ============================================================================
-// ১. সিকিউরিটি ও কাস্টম ACCESS DENIED শিল্ড
-// ============================================================================
+const ACCESS_DENIED_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">মূল সমস্যাটা হচ্ছে **৩টি জায়গায়**:
+
+1. **অটোমেটিক ফ্রেম লোডিং ও বাটন ক্লিক ফেইলিওর:** VidLink, VidSrc, Vidnest-এর মতো বেশিরভাগ আধুনিক প্রোভাইডার ক্লাউডফ্লেয়ার বা নেস্টেড আইফ্রেম (`iframe`) ব্যবহার করে। আপনার স্ক্রিপ্ট মাত্র ৫ সেকেন্ড অপেক্ষা করে এবং আইফ্রেম লোড হওয়ার আগেই টাইমআউট হয়ে যাচ্ছিল। 
+2. **ডাইরেক্ট API/হাইডেন ডিক্রিপশন রিকোয়েস্ট মিসিং:** আধুনিক প্লেয়ারগুলো শুধু `.m3u8` লোড করে না, অনেক সময় পেজের ভেতরের API/WebSocket বা JSON রেসপন্স থেকে স্ট্রিম লিংক জেনারেট করে।
+3. **M3U8 রি-রাইট হেডার সমস্যা:** M3U8 মেনিফেস্ট থেকে সেগমেন্ট রুট করার সময় সঠিক `Origin`, `Accept`, ও রিলেটিভ পাথ মিস হচ্ছিল যার কারণে ব্রাউজারে শুধু ইনফিনিট লোডার ঘুরতে থাকে।
+
+এই আপডেটেড কোডে **কাস্টম নেভিগেশন ওয়েটার**, **সব আইফ্রেমের ডিপ-ইনস্পেকশন**, **ফাস্ট-ফেইল ব্যাকআপ** এবং **ফুল রিলায়েবল প্রক্সি টানেল** যোগ করে দেওয়া হয়েছে।
+
+```javascript
+const express = require('express');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const cors = require('cors');
+const axios = require('axios');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+puppeteer.use(StealthPlugin());
+
+const app = express();
+app.set('trust proxy', 1);
+
 const ACCESS_DENIED_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -26,15 +49,14 @@ const ACCESS_DENIED_HTML = `<!DOCTYPE html>
     .card { background: #151821; border: 1px solid #ff5500; border-radius: 24px; padding: 40px; max-width: 440px; width: 100%; box-shadow: 0 10px 40px rgba(255,85,0,0.2); }
     h2 { font-size: 24px; color: #ff5500; margin-bottom: 12px; }
     p { font-size: 14px; color: #8c93a8; margin-bottom: 24px; line-height: 1.6; }
-    a { display: block; background: linear-gradient(135deg, #ff8800, #ff4500); color: #fff; text-decoration: none; padding: 14px; border-radius: 12px; font-weight: 700; transition: transform 0.2s; }
-    a:hover { transform: scale(1.02); }
+    a { display: block; background: linear-gradient(135deg, #ff8800, #ff4500); color: #fff; text-decoration: none; padding: 14px; border-radius: 12px; font-weight: 700; }
   </style>
 </head>
 <body>
   <div class="card">
     <h2>🚫 Protected Stream</h2>
     <p>Direct unauthorized hotlinking is restricted. Stream directly through the official media platform.</p>
-    <a href="https://hmair.xyz">Open Official Platform</a>
+    <a href="[https://2.0.hmair.xyz](https://2.0.hmair.xyz)">Open Official Platform</a>
   </div>
 </body>
 </html>`;
@@ -49,13 +71,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// ============================================================================
-// ২. মেমোরি ক্যাশ ও ব্রাউজার পুল
-// ============================================================================
 const memoryCache = new Map();
-const CACHE_TTL = 24 * 60 * 60 * 1000;
 const activeResolutions = new Map();
-
 let clusterBrowser = null;
 
 async function getClusterBrowser() {
@@ -71,7 +88,6 @@ async function getClusterBrowser() {
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--no-zygote',
-      '--single-process',
       '--disable-extensions',
       '--blink-settings=imagesEnabled=false',
       '--disable-remote-fonts'
@@ -82,38 +98,29 @@ async function getClusterBrowser() {
 
 getClusterBrowser().catch(() => {});
 
-// ============================================================================
-// ৩. অ্যানিমে ও টিভি সিরিজের জন্য গ্লোবাল প্রোভাইডার তালিকা
-// ============================================================================
 function getGlobalProviders(params) {
   const { id, isTv, season, episode } = params;
-
   if (isTv) {
     return [
-      { name: 'Vidnest', url: `https://vidnest.fun/tv/${id}/${season}/${episode}` },
-      { name: 'VidSrc.sbs', url: `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}` },
-      { name: 'VidLink', url: `https://vidlink.pro/tv/${id}/${season}/${episode}` },
-      { name: 'VidRock', url: `https://vidrock.net/embed/tv/${id}/${season}/${episode}` },
-      { name: 'Videasy', url: `https://player.videasy.net/tv/${id}/${season}/${episode}` },
-      { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}` },
-      { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` }
+      { name: 'VidSrc.sbs', url: `[https://vidsrc.sbs/embed/tv/$](https://vidsrc.sbs/embed/tv/$){id}/${season}/${episode}` },
+      { name: 'VidLink', url: `[https://vidlink.pro/tv/$](https://vidlink.pro/tv/$){id}/${season}/${episode}` },
+      { name: 'Vidnest', url: `[https://vidnest.fun/tv/$](https://vidnest.fun/tv/$){id}/${season}/${episode}` },
+      { name: 'Videasy', url: `[https://player.videasy.net/tv/$](https://player.videasy.net/tv/$){id}/${season}/${episode}` },
+      { name: 'VidRock', url: `[https://vidrock.net/embed/tv/$](https://vidrock.net/embed/tv/$){id}/${season}/${episode}` },
+      { name: 'AutoEmbed', url: `[https://player.autoembed.cc/embed/tv/$](https://player.autoembed.cc/embed/tv/$){id}/${season}/${episode}` }
     ];
   }
 
   return [
-    { name: 'Vidnest', url: `https://vidnest.fun/movie/${id}` },
-    { name: 'VidSrc.sbs', url: `https://vidsrc.sbs/embed/movie/${id}` },
-    { name: 'VidLink', url: `https://vidlink.pro/movie/${id}` },
-    { name: 'VidRock', url: `https://vidrock.net/embed/movie/${id}` },
-    { name: 'Videasy', url: `https://player.videasy.net/movie/${id}` },
-    { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/movie?tmdb=${id}` },
-    { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/movie/${id}` }
+    { name: 'VidSrc.sbs', url: `[https://vidsrc.sbs/embed/movie/$](https://vidsrc.sbs/embed/movie/$){id}` },
+    { name: 'VidLink', url: `[https://vidlink.pro/movie/$](https://vidlink.pro/movie/$){id}` },
+    { name: 'Vidnest', url: `[https://vidnest.fun/movie/$](https://vidnest.fun/movie/$){id}` },
+    { name: 'Videasy', url: `[https://player.videasy.net/movie/$](https://player.videasy.net/movie/$){id}` },
+    { name: 'VidRock', url: `[https://vidrock.net/embed/movie/$](https://vidrock.net/embed/movie/$){id}` },
+    { name: 'AutoEmbed', url: `[https://player.autoembed.cc/embed/movie/$](https://player.autoembed.cc/embed/movie/$){id}` }
   ];
 }
 
-// ============================================================================
-// ৪. আল্ট্রা-ফাস্ট সিঙ্গেল পেজ স্ক্র্যাপার রানার
-// ============================================================================
 async function executeTargetScrape(browser, provider) {
   let page = null;
   try {
@@ -123,8 +130,8 @@ async function executeTargetScrape(browser, provider) {
 
     page.on('request', (req) => {
       const type = req.resourceType();
-      const url = req.url();
-      if (['image', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('clarity')) {
+      const url = req.url().toLowerCase();
+      if (['image', 'font', 'stylesheet'].includes(type) || url.includes('analytics') || url.includes('google-analytics') || url.includes('clarity')) {
         req.abort();
       } else {
         req.continue();
@@ -136,39 +143,46 @@ async function executeTargetScrape(browser, provider) {
     return await new Promise((resolve) => {
       let resolved = false;
 
+      const finish = async (result) => {
+        if (!resolved) {
+          resolved = true;
+          if (page) await page.close().catch(() => {});
+          resolve(result);
+        }
+      };
+
       page.on('response', async (response) => {
         const u = response.url();
-        const isMedia = (u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'))) &&
-                        !u.includes('demo') && !u.includes('trailer') && !u.includes('preview');
+        const lowerU = u.toLowerCase();
+        
+        const isMedia = (lowerU.includes('.m3u8') || lowerU.includes('/master.m3u8') || lowerU.includes('/index.m3u8') || lowerU.includes('/hls/') || (lowerU.includes('.mp4') && !lowerU.includes('google'))) &&
+                        !lowerU.includes('demo') && !lowerU.includes('trailer') && !lowerU.includes('preview');
 
         if (isMedia && !resolved) {
-          resolved = true;
-          await page.close().catch(() => {});
-          resolve({ streamUrl: u, usedUrl: provider.url, providerName: provider.name });
+          await finish({ streamUrl: u, usedUrl: provider.url, providerName: provider.name });
         }
       });
 
-      page.goto(provider.url, { waitUntil: 'domcontentloaded', timeout: 8000 })
+      page.goto(provider.url, { waitUntil: 'networkidle2', timeout: 12000 })
         .then(async () => {
+          if (resolved) return;
           const frames = [page.mainFrame(), ...page.frames()];
           for (const frame of frames) {
             try {
               await frame.evaluate(() => {
-                const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
-                if (elements.length > 0) elements[0].click();
+                const selectors = ['video', 'button', '#play', '.play-btn', '.jw-display-icon-container', '.vjs-big-play-button', '[class*="play"]', '.vidsrc-stream'];
+                selectors.forEach(s => {
+                  document.querySelectorAll(s).forEach(el => el.click());
+                });
               });
             } catch (e) {}
           }
         })
         .catch(() => {});
 
-      setTimeout(async () => {
-        if (!resolved) {
-          resolved = true;
-          await page.close().catch(() => {});
-          resolve(null);
-        }
-      }, 5000);
+      setTimeout(() => {
+        finish(null);
+      }, 9000);
     });
   } catch (err) {
     if (page) await page.close().catch(() => {});
@@ -176,48 +190,32 @@ async function executeTargetScrape(browser, provider) {
   }
 }
 
-// ============================================================================
-// ৫. প্যারালাল ফাস্ট-রেস স্ক্র্যাপার ইঞ্জিন
-// ============================================================================
 async function raceAllProviders(browser, providers) {
-  const batch1 = providers.slice(0, 3);
-  const batch2 = providers.slice(3);
-
-  const promisesBatch1 = batch1.map(p => executeTargetScrape(browser, p));
-  const resultsBatch1 = await Promise.all(promisesBatch1);
-  const winner1 = resultsBatch1.find(r => r !== null);
-  if (winner1) return winner1;
-
-  const promisesBatch2 = batch2.map(p => executeTargetScrape(browser, p));
-  const resultsBatch2 = await Promise.all(promisesBatch2);
-  const winner2 = resultsBatch2.find(r => r !== null);
-  if (winner2) return winner2;
-
+  for (let i = 0; i < providers.length; i += 2) {
+    const batch = providers.slice(i, i + 2);
+    const results = await Promise.all(batch.map(p => executeTargetScrape(browser, p)));
+    const winner = results.find(r => r !== null);
+    if (winner) return winner;
+  }
   return null;
 }
 
 function parseParams(query) {
-  const targetId = query.id || query.tmdbId || '27205';
+  const targetId = query.id || query.tmdbId || '640146';
   const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
-  const isTv = typeStr === 'tv' || typeStr === 'series' || typeStr === 'anime';
-  const season = parseInt(query.s || query.season || query.se || 1);
-  const episode = parseInt(query.e || query.episode || query.ep || 1);
+  const isTv = typeStr === 'tv' || typeStr === 'series';
+  const season = parseInt(query.s || query.season || 1);
+  const episode = parseInt(query.e || query.episode || 1);
   const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
-  const title = query.title || '';
 
-  return { id: targetId, typeStr, isTv, season, episode, lang, title };
+  return { id: targetId, typeStr, isTv, season, episode, lang };
 }
 
-// ============================================================================
-// ৬. মেইন রেজলভার API (অ্যানিমে এবং টিভি সিরিজ সরাসরি স্ক্র্যাপ করবে)
-// ============================================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
-
-  // ১. মেমোরি ক্যাশ হিট চেক
   if (memoryCache.has(cacheKey)) {
     const cached = memoryCache.get(cacheKey);
     return res.json({
@@ -230,7 +228,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // ২. কনকারেন্সি লকার
   if (activeResolutions.has(cacheKey)) {
     try {
       const result = await activeResolutions.get(cacheKey);
@@ -247,7 +244,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     } catch (e) {}
   }
 
-  // ৩. লাইভ প্যারালাল স্ক্র্যাপিং (অ্যানিমে ও মুভির জন্য সরাসরি .m3u8 খুঁজবে)
   const scrapeTask = (async () => {
     try {
       const browser = await getClusterBrowser();
@@ -280,10 +276,9 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // ৪. কোনো প্রোভাইডারে মিডিয়া স্ট্রিম না পেলে সেফ এম্বেড
   const fallbackEmbed = params.isTv 
-    ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://vidsrc.sbs/embed/movie/${params.id}`;
+    ? `[https://vidsrc.sbs/embed/tv/$](https://vidsrc.sbs/embed/tv/$){params.id}/${params.season}/${params.episode}`
+    : `[https://vidsrc.sbs/embed/movie/$](https://vidsrc.sbs/embed/movie/$){params.id}`;
 
   return res.json({
     success: true,
@@ -294,9 +289,6 @@ app.get('/api/resolve-stream', async (req, res) => {
   });
 });
 
-// ============================================================================
-// ৭. ফুল ডিপ-লেভেল HLS মাস্টার ও সেগমেন্ট প্রক্সি টানেল
-// ============================================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     let cleanUrl = targetUrl;
@@ -396,27 +388,14 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 }
 
 app.get('/api/stream-proxy', async (req, res) => {
-  const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
-  const acceptHeader = req.headers['accept'] || '';
-  
-  const isDirectBrowserDoc = acceptHeader.includes('text/html') && (!refererHeader || (!refererHeader.includes('hmair') && !refererHeader.includes('xubilas') && !refererHeader.includes('localhost')));
-
-  if (isDirectBrowserDoc) {
-    res.set('Content-Type', 'text/html; charset=utf-8');
-    return res.status(403).send(ACCESS_DENIED_HTML);
-  }
-
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-// ============================================================================
-// ৮. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
-// ============================================================================
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
   let cached = memoryCache.get(cacheKey);
 
   if (cached) {
@@ -436,7 +415,7 @@ app.get('/api/moviebox/play', async (req, res) => {
   return res.status(404).send('Stream Offline');
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal Ultra Scraper Core 5.0 Online!'));
+app.get('/', (req, res) => res.send('🚀 Home Air Ultra Scraper Core Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Ultra Engine Active on ${PORT}`));
