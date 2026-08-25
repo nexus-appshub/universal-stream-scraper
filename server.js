@@ -11,16 +11,6 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
-const ALLOWED_ORIGINS = [
-  'https://homeairtv.xubilaswebdevcorp.shop',
-  'https://anime.hmair.xyz',
-  'https://hmair.xyz',
-  'https://www.hmair.xyz',
-  'https://2.0.hmair.xyz',
-  'http://localhost:3000',
-  'http://localhost:5173'
-];
-
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -63,19 +53,19 @@ function getGlobalProviders(params) {
   if (isTv) {
     return [
       { name: 'Vidnest', url: `https://vidnest.fun/tv/${id}/${season}/${episode}` },
-      { name: 'VidSrc.sbs', url: `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}` },
       { name: 'VidLink', url: `https://vidlink.pro/tv/${id}/${season}/${episode}` },
       { name: 'VidRock', url: `https://vidrock.net/embed/tv/${id}/${season}/${episode}` },
       { name: 'Videasy', url: `https://player.videasy.net/tv/${id}/${season}/${episode}` },
+      { name: 'VidSrc.sbs', url: `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}` },
       { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}` }
     ];
   }
   return [
     { name: 'Vidnest', url: `https://vidnest.fun/movie/${id}` },
-    { name: 'VidSrc.sbs', url: `https://vidsrc.sbs/embed/movie/${id}` },
     { name: 'VidLink', url: `https://vidlink.pro/movie/${id}` },
     { name: 'VidRock', url: `https://vidrock.net/embed/movie/${id}` },
     { name: 'Videasy', url: `https://player.videasy.net/movie/${id}` },
+    { name: 'VidSrc.sbs', url: `https://vidsrc.sbs/embed/movie/${id}` },
     { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/movie?tmdb=${id}` }
   ];
 }
@@ -111,7 +101,7 @@ async function executeTargetScrape(browser, provider) {
         }
       });
 
-      page.goto(provider.url, { waitUntil: 'domcontentloaded', timeout: 8000 })
+      page.goto(provider.url, { waitUntil: 'domcontentloaded', timeout: 9000 })
         .then(async () => {
           const frames = [page.mainFrame(), ...page.frames()];
           for (const frame of frames) {
@@ -131,7 +121,7 @@ async function executeTargetScrape(browser, provider) {
           await page.close().catch(() => {});
           resolve(null);
         }
-      }, 5000);
+      }, 6000);
     });
   } catch (err) {
     if (page) await page.close().catch(() => {});
@@ -161,6 +151,7 @@ function parseParams(query) {
   return { id: targetId, typeStr, isTv, season, episode, lang, title };
 }
 
+// ১০০% পিওর নেটিভ স্ক্র্যাপ API (জিরো এম্বেড)
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
@@ -210,16 +201,9 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  const fallbackEmbed = params.isTv
-    ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://vidsrc.sbs/embed/movie/${params.id}`;
-
-  return res.json({
-    success: true,
-    isEmbed: true,
-    streamUrl: fallbackEmbed,
-    embedUrl: fallbackEmbed,
-    type: params.typeStr,
+  return res.status(404).json({
+    success: false,
+    error: 'Stream not found on native scraper networks',
   });
 });
 
@@ -251,7 +235,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         Origin: ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
-      timeout: 20000,
+      timeout: 25000,
     });
 
     if (cleanUrl.includes('.m3u8')) {
@@ -297,4 +281,4 @@ app.get('/api/stream-proxy', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Active on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Pure Native Scraper Online on ${PORT}`));
