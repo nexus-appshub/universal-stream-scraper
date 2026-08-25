@@ -13,18 +13,212 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ========================================================
+// কাস্টম ACCESS DENIED HTML টেমপ্লেট
+// ========================================================
+const ACCESS_DENIED_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Access Denied - HOME AIR TV</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Poppins', sans-serif;
+    }
+    body {
+      background: radial-gradient(circle at top right, #fff5f0, #ffffff 60%, #fff0e6);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #333333;
+      padding: 20px;
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(255, 107, 0, 0.15);
+      box-shadow: 0 20px 50px rgba(255, 107, 0, 0.12);
+      border-radius: 28px;
+      padding: 45px 35px;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      background: linear-gradient(90deg, #ff8800, #ff4500);
+    }
+    .header-logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      margin-bottom: 25px;
+      transition: transform 0.2s ease;
+    }
+    .header-logo:hover {
+      transform: scale(1.04);
+    }
+    .logo-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #ff8800, #ff4500);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 15px rgba(255, 107, 0, 0.35);
+    }
+    .logo-icon svg {
+      width: 22px;
+      height: 22px;
+      fill: #ffffff;
+      margin-left: 3px;
+    }
+    .logo-text {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      background: linear-gradient(90deg, #ff5500, #ff8800);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .badge {
+      background: #ff5500;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      vertical-align: middle;
+      -webkit-text-fill-color: white;
+    }
+    .icon-box {
+      width: 75px;
+      height: 75px;
+      background: #fff4ed;
+      border: 2px dashed #ff8800;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+    .icon-box svg {
+      width: 36px;
+      height: 36px;
+      stroke: #ff5500;
+    }
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 10px;
+    }
+    p {
+      color: #666666;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 25px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: linear-gradient(135deg, #ff8800 0%, #ff5500 100%);
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 15px;
+      padding: 14px 32px;
+      border-radius: 14px;
+      box-shadow: 0 8px 25px rgba(255, 85, 0, 0.35);
+      transition: all 0.25s ease;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+    .btn:hover {
+      box-shadow: 0 12px 30px rgba(255, 85, 0, 0.45);
+      transform: translateY(-2px);
+      filter: brightness(1.05);
+    }
+    .btn-tg {
+      display: inline-block;
+      background: #229ED9;
+      color: white;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      transition: background 0.2s;
+      width: 100%;
+    }
+    .btn-tg:hover {
+      background: #1c88bd;
+    }
+    .footer-note {
+      margin-top: 25px;
+      font-size: 12px;
+      color: #999999;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <a href="https://hmair.xyz" class="header-logo" title="Go to Home Air TV">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+      </div>
+      <div class="logo-text">HOME AIR <span class="badge">TV</span></div>
+    </a>
+    <div class="icon-box">
+      <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+      </svg>
+    </div>
+    <h2>🚫Access Denied🤚</h2>
+    <p>
+      🤦‍♂️ভাই লিংক কপি করে লাভ নেই!<br>
+      যদি লিংকের এতই প্রয়োজন হয় তবে ডেভেলপারকে সরাসরি কন্টাক্ট করেন, তাও এভাবে নেটওয়ার্ক ট্যাব ঘেঁটে লিংক খোঁজা বাদ দেন 😒 Please stream seamlessly through the official platform.
+    </p>
+    <a href="https://hmair.xyz" class="btn">
+      <span>Watch on Official Website</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+    </a>
+    <a href="https://t.me/homeairtv" class="btn-tg" target="_blank" rel="noopener noreferrer">JOIN TG 😜</a>
+    <div class="footer-note">Protected by Stream Proxy Shield • 2026</div>
+  </div>
+</body>
+</html>`;
+
+// ========================================================
 // সিকিউরিটি: অনুমোদিত ডোমেইন তালিকা (Anti-Hotlink Guard)
 // ========================================================
 const ALLOWED_ORIGINS = [
   'https://homeairtv.xubilaswebdevcorp.shop',
   'https://anime.hmair.xyz',
+  'https://hmair.xyz',
   'http://localhost:3000',
   'http://localhost:5173'
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    // মোবাইল অ্যাপ ও পোস্টম্যানের ক্ষেত্রে origin খালি থাকতে পারে
     if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
       return callback(null, true);
     }
@@ -104,7 +298,7 @@ async function getAnimeExternalIds(title = '') {
 }
 
 async function resolveDubStream(params) {
-  const { id, episode = 1, title, malId: paramMal, anilistId: paramAni } = params;
+  const { id, episode = 1, title, malId: paramMal, anilistId: paramAni, season = 1 } = params;
   let malId = paramMal;
   let anilistId = paramAni;
 
@@ -114,7 +308,6 @@ async function resolveDubStream(params) {
     anilistId = ext.anilistId;
   }
 
-  // MAL / AniList Endpoint (DUB Only)
   if (malId) return `https://megaplay.buzz/stream/mal/${malId}/${episode}/dub`;
   if (anilistId) return `https://megaplay.buzz/stream/ani/${anilistId}/${episode}/dub`;
 
@@ -128,7 +321,7 @@ async function resolveDubStream(params) {
     }
   } catch (e) {}
 
-  return `https://vidsrc.sbs/embed/tv/${id}/${params.season}/${episode}?dub=1`;
+  return `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}?dub=1`;
 }
 
 // ========================================================
@@ -156,13 +349,16 @@ function getWebProviderUrls(params) {
   ];
 }
 
+// ৩. হাইপার-অপ্টিমাইজড ফাস্ট স্ক্র্যাপার (সব এপিসোড ক্যাপচার নিশ্চিত করবে)
 async function fastScrape(browser, targetUrl) {
   const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
   await page.setRequestInterception(true);
+  
   page.on('request', (req) => {
     const type = req.resourceType();
     const url = req.url();
-    if (['image', 'stylesheet', 'font', 'media'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
+    if (['image', 'stylesheet', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
       req.abort();
     } else {
       req.continue();
@@ -187,11 +383,27 @@ async function fastScrape(browser, targetUrl) {
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
-      await page.evaluate(() => {
-        const btn = document.querySelector('video, button, #play, .play-btn');
-        if (btn) btn.click();
-      });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 9000 });
+
+      // মাল্টি-লেয়ার ক্লিক ট্রিগার (যাতে কোনো এপিসোডের প্লে বাটন মিস না হয়)
+      const triggerPlay = async () => {
+        const frames = [page.mainFrame(), ...page.frames()];
+        for (const frame of frames) {
+          try {
+            await frame.evaluate(() => {
+              const buttons = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
+              if (buttons.length > 0) {
+                buttons[0].click();
+              }
+            });
+          } catch (e) {}
+        }
+      };
+
+      await triggerPlay();
+      await new Promise(r => setTimeout(r, 1000));
+      await triggerPlay();
+
     } catch (e) {}
 
     setTimeout(async () => {
@@ -200,12 +412,12 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 4500);
+    }, 5500);
   });
 }
 
 // ========================================================
-// ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
+// ৪. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
 // ========================================================
 async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsPly') {
   const page = await browser.newPage();
@@ -294,7 +506,7 @@ function parseParams(query) {
 }
 
 // ========================================================
-// ৪. মেইন JSON RESOLVER API (HIGH TRAFFIC OPTIMIZED)
+// ৫. মেইন JSON RESOLVER API
 // ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
@@ -390,7 +602,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ========================================================
-// ৫. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
+// ৬. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
 // ========================================================
 app.get('/api/vidsrc/scrape', async (req, res) => {
   const params = parseParams(req.query);
@@ -443,12 +655,11 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
 });
 
 // ========================================================
-// ৬. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও হটলিস্ট ফিক্স)
+// ৭. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও লাইভ পাইপিং)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     let cleanUrl = targetUrl;
-    // ডাবল এনকোডেড ক্লাউডফ্লেয়ার ওয়ার্কার লিংক ফিক্স
     while (cleanUrl.includes('%3A') || cleanUrl.includes('%2F')) {
       try {
         const decoded = decodeURIComponent(cleanUrl);
@@ -472,7 +683,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       headers: {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
       timeout: 20000
     });
@@ -514,16 +725,16 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
 app.get('/api/stream-proxy', async (req, res) => {
   const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
-  
-  // ব্রাউজার হটলিংক প্রটেকশন (অননুমোদিত ডোমেইন ব্লক)
+  const acceptHeader = req.headers['accept'] || '';
+
   const isAuthorized = 
-    !refererHeader || 
     ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
     refererHeader.includes('xubilas') ||
     refererHeader.includes('hmair');
 
-  if (!isAuthorized) {
-    return res.status(403).json({ error: 'Access Denied: Hotlinking is not allowed.' });
+  if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    return res.status(403).send(ACCESS_DENIED_HTML);
   }
 
   const { url, referer } = req.query;
@@ -531,15 +742,34 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
+// ৮. MovieBox Native Play Endpoint (ক্যাশ মিস হলে অটো-স্ক্র্যাপ সাপোর্ট)
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
   if (params.lang === 'dub') {
     const dubEmbed = await resolveDubStream(params);
     return res.redirect(dubEmbed);
   }
+
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-  const cached = streamCache.get(cacheKey);
-  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  let cached = streamCache.get(cacheKey);
+
+  if (cached) {
+    return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  }
+
+  // ক্যাশে না থাকলে ইনস্ট্যান্ট ব্যাকগ্রাউন্ড স্ক্র্যাপ
+  try {
+    const browser = await getWarmBrowser();
+    const urls = getWebProviderUrls(params);
+    for (const url of urls) {
+      const streamUrl = await fastScrape(browser, url);
+      if (streamUrl) {
+        streamCache.set(cacheKey, { url: streamUrl, ref: url, time: Date.now() });
+        return pipeMediaTunnel(req, res, streamUrl, url);
+      }
+    }
+  } catch (e) {}
+
   return res.status(404).send('Stream Offline');
 });
 
