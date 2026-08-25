@@ -23,65 +23,158 @@ const ACCESS_DENIED_HTML = `<!DOCTYPE html>
   <title>Access Denied - HOME AIR TV</title>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Poppins', sans-serif; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Poppins', sans-serif;
+    }
     body {
       background: radial-gradient(circle at top right, #fff5f0, #ffffff 60%, #fff0e6);
       min-height: 100vh;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      color: #333333; padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #333333;
+      padding: 20px;
     }
     .card {
       background: rgba(255, 255, 255, 0.95);
       border: 1px solid rgba(255, 107, 0, 0.15);
       box-shadow: 0 20px 50px rgba(255, 107, 0, 0.12);
-      border-radius: 28px; padding: 45px 35px; max-width: 480px; width: 100%;
-      text-align: center; position: relative; overflow: hidden;
+      border-radius: 28px;
+      padding: 45px 35px;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
     }
     .card::before {
-      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
       background: linear-gradient(90deg, #ff8800, #ff4500);
     }
     .header-logo {
-      display: inline-flex; align-items: center; gap: 10px; text-decoration: none;
-      margin-bottom: 25px; transition: transform 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      margin-bottom: 25px;
+      transition: transform 0.2s ease;
     }
-    .header-logo:hover { transform: scale(1.04); }
+    .header-logo:hover {
+      transform: scale(1.04);
+    }
     .logo-icon {
-      width: 44px; height: 44px; background: linear-gradient(135deg, #ff8800, #ff4500);
-      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #ff8800, #ff4500);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       box-shadow: 0 4px 15px rgba(255, 107, 0, 0.35);
     }
-    .logo-icon svg { width: 22px; height: 22px; fill: #ffffff; margin-left: 3px; }
+    .logo-icon svg {
+      width: 22px;
+      height: 22px;
+      fill: #ffffff;
+      margin-left: 3px;
+    }
     .logo-text {
-      font-size: 26px; font-weight: 800; letter-spacing: 0.5px;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
       background: linear-gradient(90deg, #ff5500, #ff8800);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
     .badge {
-      background: #ff5500; color: white; font-size: 11px; font-weight: 700;
-      padding: 2px 7px; border-radius: 6px; vertical-align: middle; -webkit-text-fill-color: white;
+      background: #ff5500;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      vertical-align: middle;
+      -webkit-text-fill-color: white;
     }
     .icon-box {
-      width: 75px; height: 75px; background: #fff4ed; border: 2px dashed #ff8800;
-      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      width: 75px;
+      height: 75px;
+      background: #fff4ed;
+      border: 2px dashed #ff8800;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       margin: 0 auto 20px;
     }
-    .icon-box svg { width: 36px; height: 36px; stroke: #ff5500; }
-    h2 { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-bottom: 10px; }
-    p { color: #666666; font-size: 14px; line-height: 1.6; margin-bottom: 25px; }
+    .icon-box svg {
+      width: 36px;
+      height: 36px;
+      stroke: #ff5500;
+    }
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 10px;
+    }
+    p {
+      color: #666666;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 25px;
+    }
     .btn {
-      display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
       background: linear-gradient(135deg, #ff8800 0%, #ff5500 100%);
-      color: #ffffff; text-decoration: none; font-weight: 600; font-size: 15px;
-      padding: 14px 32px; border-radius: 14px; box-shadow: 0 8px 25px rgba(255, 85, 0, 0.35);
-      transition: all 0.25s ease; width: 100%; margin-bottom: 12px;
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 15px;
+      padding: 14px 32px;
+      border-radius: 14px;
+      box-shadow: 0 8px 25px rgba(255, 85, 0, 0.35);
+      transition: all 0.25s ease;
+      width: 100%;
+      margin-bottom: 12px;
     }
-    .btn:hover { box-shadow: 0 12px 30px rgba(255, 85, 0, 0.45); transform: translateY(-2px); }
+    .btn:hover {
+      box-shadow: 0 12px 30px rgba(255, 85, 0, 0.45);
+      transform: translateY(-2px);
+      filter: brightness(1.05);
+    }
     .btn-tg {
-      display: inline-block; background: #229ED9; color: white; text-decoration: none;
-      font-weight: 700; font-size: 13px; padding: 10px 20px; border-radius: 10px; width: 100%;
+      display: inline-block;
+      background: #229ED9;
+      color: white;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      transition: background 0.2s;
+      width: 100%;
     }
-    .footer-note { margin-top: 25px; font-size: 12px; color: #999999; }
+    .btn-tg:hover {
+      background: #1c88bd;
+    }
+    .footer-note {
+      margin-top: 25px;
+      font-size: 12px;
+      color: #999999;
+    }
   </style>
 </head>
 <body>
@@ -124,7 +217,17 @@ const ALLOWED_ORIGINS = [
   'http://localhost:5173'
 ];
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
+      return callback(null, true);
+    }
+    return callback(new Error('Access Denied: Hotlinking Prohibited'));
+  },
+  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+  allowedHeaders: '*'
+}));
+
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -134,8 +237,11 @@ app.use((req, res, next) => {
   next();
 });
 
+// ১০০K ট্রাফিকের জন্য ২৪ ঘণ্টা মেমোরি ক্যাশ
 const streamCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
+
+// কনকারেন্সি লকার
 const pendingScrapes = new Map();
 
 let globalBrowser = null;
@@ -165,16 +271,25 @@ async function getWarmBrowser() {
 getWarmBrowser().catch(() => {});
 
 // ========================================================
-// ১. DUB রেজলভার
+// ১. DUB এর জন্য MAL / ANILIST / MEGAPLAY রেজলভার
 // ========================================================
 async function getAnimeExternalIds(title = '') {
   try {
+    const query = `
+      query ($search: String) {
+        Media (search: $search, type: ANIME) {
+          id
+          idMal
+        }
+      }
+    `;
     const cleanTitle = title.replace(/[^\w\s]/gi, '');
     if (cleanTitle) {
       const res = await axios.post('https://graphql.anilist.co', {
-        query: `query ($search: String) { Media (search: $search, type: ANIME) { id idMal } }`,
+        query,
         variables: { search: cleanTitle }
       }, { timeout: 4000 });
+
       const media = res.data?.data?.Media;
       if (media) return { malId: media.idMal, anilistId: media.id };
     }
@@ -210,10 +325,11 @@ async function resolveDubStream(params) {
 }
 
 // ========================================================
-// ২. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার
+// ২. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার (SUB, Movies, TV Series)
 // ========================================================
 function getWebProviderUrls(params) {
   const { id, isTv, season, episode } = params;
+
   if (isTv) {
     return [
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
@@ -223,6 +339,7 @@ function getWebProviderUrls(params) {
       `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
     ];
   }
+
   return [
     `https://vidnest.fun/movie/${id}`,
     `https://player.autoembed.cc/embed/movie/${id}`,
@@ -232,6 +349,7 @@ function getWebProviderUrls(params) {
   ];
 }
 
+// ৩. হাইপার-অপ্টিমাইজড ফাস্ট স্ক্র্যাপার (সব এপিসোড ক্যাপচার নিশ্চিত করবে)
 async function fastScrape(browser, targetUrl) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 720 });
@@ -266,20 +384,26 @@ async function fastScrape(browser, targetUrl) {
 
     try {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 9000 });
+
+      // মাল্টি-লেয়ার ক্লিক ট্রিগার (যাতে কোনো এপিসোডের প্লে বাটন মিস না হয়)
       const triggerPlay = async () => {
         const frames = [page.mainFrame(), ...page.frames()];
         for (const frame of frames) {
           try {
             await frame.evaluate(() => {
               const buttons = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
-              if (buttons.length > 0) buttons[0].click();
+              if (buttons.length > 0) {
+                buttons[0].click();
+              }
             });
           } catch (e) {}
         }
       };
+
       await triggerPlay();
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 1000));
       await triggerPlay();
+
     } catch (e) {}
 
     setTimeout(async () => {
@@ -288,12 +412,12 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 6000);
+    }, 5500);
   });
 }
 
 // ========================================================
-// ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
+// ৪. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
 // ========================================================
 async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsPly') {
   const page = await browser.newPage();
@@ -302,10 +426,12 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
 
   return new Promise(async (resolve) => {
     let resolved = false;
+
     page.on('response', async (response) => {
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
       const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
+
       if (isMedia && !isFake && !resolved) {
         resolved = true;
         await page.close().catch(() => {});
@@ -315,6 +441,7 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
 
     try {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+
       const triggerPlayback = async () => {
         const frames = [page.mainFrame(), ...page.frames()];
         for (const frame of frames) {
@@ -322,12 +449,14 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
             await frame.evaluate((srvName) => {
               const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
               if (btn) btn.click();
+
               const allElements = Array.from(document.querySelectorAll('*'));
               const dropdown = allElements.find(el => {
                 const t = (el.innerText || el.textContent || '').trim();
                 return t.includes('Pro Multi') || t.includes('Server') || el.classList.contains('server-item');
               });
               if (dropdown) dropdown.click();
+
               const serverOption = allElements.find(el => {
                 const t = (el.innerText || el.textContent || '').trim();
                 return (
@@ -344,9 +473,11 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
           } catch (e) {}
         }
       };
+
       await triggerPlayback();
       await new Promise(r => setTimeout(r, 1200));
       await triggerPlayback();
+
     } catch (e) {}
 
     setTimeout(async () => {
@@ -375,7 +506,7 @@ function parseParams(query) {
 }
 
 // ========================================================
-// ৪. মেইন JSON RESOLVER API
+// ৫. মেইন JSON RESOLVER API
 // ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
@@ -444,6 +575,7 @@ app.get('/api/resolve-stream', async (req, res) => {
   })();
 
   pendingScrapes.set(cacheKey, scrapeTask);
+
   const finalResult = await scrapeTask;
 
   if (finalResult) {
@@ -470,7 +602,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ========================================================
-// ৫. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ
+// ৬. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
 // ========================================================
 app.get('/api/vidsrc/scrape', async (req, res) => {
   const params = parseParams(req.query);
@@ -523,7 +655,7 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
 });
 
 // ========================================================
-// ৬. সেফ মিডিয়া টানেল প্রক্সি (সেগমেন্ট রিরাইট ও লাইভ স্ট্রিম ফিক্স)
+// ৭. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও লাইভ পাইপিং)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -567,7 +699,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
             segmentUrl = new URL(trimmed, baseUrl).href;
           }
-          // সেগমেন্টের অরিজিনাল রেফারার প্রক্সির ভেতর সংরক্ষিত থাকবে
           return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
         }
         return line;
@@ -575,8 +706,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache'
+        'Access-Control-Allow-Origin': '*'
       });
       return res.send(rewritten);
     }
@@ -596,10 +726,13 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 app.get('/api/stream-proxy', async (req, res) => {
   const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
   const acceptHeader = req.headers['accept'] || '';
-  const isDirectBrowserDoc = acceptHeader.includes('text/html') && !refererHeader;
 
-  // শুধু ডিরেক্ট ব্রাউজারে লিংক পেস্ট করলেই কাস্টম Denied পেজ আসবে
-  if (isDirectBrowserDoc) {
+  const isAuthorized = 
+    ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
+    refererHeader.includes('xubilas') ||
+    refererHeader.includes('hmair');
+
+  if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(403).send(ACCESS_DENIED_HTML);
   }
@@ -609,7 +742,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-// ৭. MovieBox Native Play Endpoint
+// ৮. MovieBox Native Play Endpoint (ক্যাশ মিস হলে অটো-স্ক্র্যাপ সাপোর্ট)
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
   if (params.lang === 'dub') {
@@ -624,6 +757,7 @@ app.get('/api/moviebox/play', async (req, res) => {
     return pipeMediaTunnel(req, res, cached.url, cached.ref);
   }
 
+  // ক্যাশে না থাকলে ইনস্ট্যান্ট ব্যাকগ্রাউন্ড স্ক্র্যাপ
   try {
     const browser = await getWarmBrowser();
     const urls = getWebProviderUrls(params);
