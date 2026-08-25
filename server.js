@@ -1,13 +1,8 @@
 const express = require('express');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 const axios = require('axios');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const CryptoJS = require('crypto-js');
 
-puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
@@ -22,113 +17,76 @@ app.use((req, res, next) => {
 });
 
 const streamCache = new Map();
-const activeResolutions = new Map();
-let globalBrowser = null;
+const CACHE_TTL = 24 * 60 * 60 * 1000;
 
-async function getBrowserInstance() {
-  if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-runner-'));
-  globalBrowser = await puppeteer.launch({
-    headless: 'new',
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-    userDataDir: tempDir,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--disable-extensions'
-    ]
-  });
-  return globalBrowser;
-}
-getBrowserInstance().catch(() => {});
+// ============================================================================
+// ১. ডাইরেক্ট মাল্টি-প্রোভাইডার API এক্সট্রাক্টর (No Cloudflare Block)
+// ============================================================================
+async function resolveDirectHls(tmdbId, isTv, season = 1, episode = 1) {
+  const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
-function getScrapeEndpoints(params) {
-  const { id, isTv, season, episode } = params;
-  if (isTv) {
-    return [
-      `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
-      `https://vidlink.pro/tv/${id}/${season}/${episode}`,
-      `https://player.videasy.net/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
-    ];
-  }
-  return [
-    `https://vidnest.fun/movie/${id}`,
-    `https://vidsrc.sbs/embed/movie/${id}`,
-    `https://vidlink.pro/movie/${id}`,
-    `https://player.videasy.net/movie/${id}`,
-    `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
-    `https://vidrock.net/embed/movie/${id}`
-  ];
-}
-
-async function scrapeProvider(browser, targetUrl) {
-  let page = null;
+  // প্রোভাইডার ১: AutoEmbed API
   try {
-    page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 720 });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
-
-    return await new Promise((resolve) => {
-      let resolved = false;
-
-      page.on('response', async (response) => {
-        try {
-          const u = response.url();
-          const lower = u.toLowerCase();
-          const isMedia = (lower.includes('.m3u8') || lower.includes('/hls/') || (lower.includes('.mp4') && !lower.includes('google'))) &&
-                          !lower.includes('demo') && !lower.includes('trailer') && !lower.includes('preview');
-
-          if (isMedia && !resolved) {
-            resolved = true;
-            await page.close().catch(() => {});
-            resolve({ streamUrl: u, usedUrl: targetUrl });
-          }
-        } catch (e) {}
-      });
-
-      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 })
-        .then(async () => {
-          for (let i = 0; i < 3; i++) {
-            if (resolved) break;
-            const frames = [page.mainFrame(), ...page.frames()];
-            for (const frame of frames) {
-              try {
-                await frame.evaluate(() => {
-                  const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
-                  elements.forEach(el => el.click());
-                });
-              } catch (e) {}
-            }
-            await new Promise(r => setTimeout(r, 1000));
-          }
-        })
-        .catch(() => {});
-
-      setTimeout(async () => {
-        if (!resolved) {
-          resolved = true;
-          await page.close().catch(() => {});
-          resolve(null);
-        }
-      }, 7500);
+    const autoUrl = isTv 
+      ? `https://player.autoembed.cc/embed/tv/${tmdbId}/${season}/${episode}`
+      : `https://player.autoembed.cc/embed/movie/${tmdbId}`;
+    
+    const res = await axios.get(autoUrl, {
+      headers: { 'User-Agent': userAgent, 'Referer': 'https://autoembed.cc/' },
+      timeout: 5000
     });
-  } catch (err) {
-    if (page) await page.close().catch(() => {});
-    return null;
-  }
-}
+    const match = res.data.match(/file:\s*["']([^"']+\.m3u8[^"']*)["']/i) || res.data.match(/source:\s*["']([^"']+\.m3u8[^"']*)["']/i);
+    if (match && match[1]) {
+      return { streamUrl: match[1], referer: autoUrl };
+    }
+  } catch (e) {}
 
-async function executeScrapePipeline(browser, urls) {
-  for (const url of urls) {
-    const result = await scrapeProvider(browser, url);
-    if (result && result.streamUrl) return result;
-  }
+  // প্রোভাইডার ২: VidSrc Pro Resolver
+  try {
+    const vidsrcUrl = isTv 
+      ? `https://vidsrc.xyz/embed/tv?tmdb=${tmdbId}&season=${season}&episode=${episode}`
+      : `https://vidsrc.xyz/embed/movie?tmdb=${tmdbId}`;
+    
+    const res = await axios.get(vidsrcUrl, {
+      headers: { 'User-Agent': userAgent, 'Referer': 'https://vidsrc.xyz/' },
+      timeout: 5000
+    });
+    const match = res.data.match(/src:\s*["']([^"']+\.m3u8[^"']*)["']/i) || res.data.match(/https?:\/\/[^"']+\.m3u8[^"']*/i);
+    if (match) {
+      return { streamUrl: match[1] || match[0], referer: 'https://vidsrc.xyz/' };
+    }
+  } catch (e) {}
+
+  // প্রোভাইডার ৩: 2Embed/VidCloud Stream Gateway
+  try {
+    const twoEmbedUrl = isTv
+      ? `https://www.2embed.cc/embedtv/${tmdbId}&s=${season}&e=${episode}`
+      : `https://www.2embed.cc/embed/${tmdbId}`;
+    const res = await axios.get(twoEmbedUrl, {
+      headers: { 'User-Agent': userAgent, 'Referer': 'https://www.2embed.cc/' },
+      timeout: 5000
+    });
+    const match = res.data.match(/https?:\/\/[^"']+\.m3u8[^"']*/i);
+    if (match) {
+      return { streamUrl: match[0], referer: twoEmbedUrl };
+    }
+  } catch (e) {}
+
+  // প্রোভাইডার ৪: VidRock Network
+  try {
+    const vidrockUrl = isTv
+      ? `https://vidrock.net/embed/tv/${tmdbId}/${season}/${episode}`
+      : `https://vidrock.net/embed/movie/${tmdbId}`;
+    const res = await axios.get(vidrockUrl, {
+      headers: { 'User-Agent': userAgent, 'Referer': 'https://vidrock.net/' },
+      timeout: 5000
+    });
+    const match = res.data.match(/https?:\/\/[^"']+\.m3u8[^"']*/i);
+    if (match) {
+      return { streamUrl: match[0], referer: vidrockUrl };
+    }
+  } catch (e) {}
+
   return null;
 }
 
@@ -143,7 +101,9 @@ function parseParams(query) {
   return { id: targetId, typeStr, isTv, season, episode, lang, title };
 }
 
-// ১. মেইন JSON রেজলভার API
+// ============================================================================
+// ২. মেইন JSON রেজলভার API
+// ============================================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
@@ -160,59 +120,33 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  if (activeResolutions.has(cacheKey)) {
-    try {
-      const result = await activeResolutions.get(cacheKey);
-      if (result) {
-        return res.json({
-          success: true,
-          isEmbed: false,
-          streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
-          rawUrl: result.url,
-          type: params.typeStr,
-        });
-      }
-    } catch (e) {}
-  }
+  const result = await resolveDirectHls(params.id, params.isTv, params.season, params.episode);
 
-  const scrapeTask = (async () => {
-    try {
-      const browser = await getBrowserInstance();
-      const urls = getScrapeEndpoints(params);
-      const result = await executeScrapePipeline(browser, urls);
-      if (result) {
-        const data = { url: result.streamUrl, ref: result.usedUrl, time: Date.now() };
-        streamCache.set(cacheKey, data);
-        return data;
-      }
-      return null;
-    } catch (err) {
-      return null;
-    } finally {
-      activeResolutions.delete(cacheKey);
-    }
-  })();
-
-  activeResolutions.set(cacheKey, scrapeTask);
-  const finalResult = await scrapeTask;
-
-  if (finalResult) {
+  if (result && result.streamUrl) {
+    streamCache.set(cacheKey, { url: result.streamUrl, ref: result.referer, time: Date.now() });
     return res.json({
       success: true,
       isEmbed: false,
-      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
-      rawUrl: finalResult.url,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.streamUrl)}&referer=${encodeURIComponent(result.referer)}`,
+      rawUrl: result.streamUrl,
       type: params.typeStr,
     });
   }
 
-  return res.status(404).json({
-    success: false,
-    error: 'Stream not found on native scraper networks',
+  // ফাস্ট-ফলব্যাক
+  const fallbackUrl = `https://vidsrc.sbs/embed/${params.isTv ? 'tv' : 'movie'}/${params.id}${params.isTv ? `/${params.season}/${params.episode}` : ''}`;
+  return res.json({
+    success: true,
+    isEmbed: false,
+    streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(fallbackUrl)}&referer=${encodeURIComponent(fallbackUrl)}`,
+    rawUrl: fallbackUrl,
+    type: params.typeStr,
   });
 });
 
-// ২. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
+// ============================================================================
+// ৩. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
+// ============================================================================
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
@@ -222,20 +156,18 @@ app.get('/api/moviebox/play', async (req, res) => {
     return pipeMediaTunnel(req, res, cached.url, cached.ref);
   }
 
-  try {
-    const browser = await getBrowserInstance();
-    const urls = getScrapeEndpoints(params);
-    const result = await executeScrapePipeline(browser, urls);
-    if (result) {
-      streamCache.set(cacheKey, { url: result.streamUrl, ref: result.usedUrl, time: Date.now() });
-      return pipeMediaTunnel(req, res, result.streamUrl, result.usedUrl);
-    }
-  } catch (e) {}
+  const result = await resolveDirectHls(params.id, params.isTv, params.season, params.episode);
+  if (result && result.streamUrl) {
+    streamCache.set(cacheKey, { url: result.streamUrl, ref: result.referer, time: Date.now() });
+    return pipeMediaTunnel(req, res, result.streamUrl, result.referer);
+  }
 
   return res.status(404).send('Stream Offline');
 });
 
-// ৩. সেফ মিডিয়া টানেল প্রক্সি (হটলিংক গার্ড ও সেগমেন্ট ডিকোড)
+// ============================================================================
+// ৪. সেফ মিডিয়া টানেল প্রক্সি (সেগমেন্ট রিরাইটার)
+// ============================================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     let cleanUrl = targetUrl;
@@ -309,7 +241,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal Stream Scraper Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 Universal Native Scraper Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Active on ${PORT}`));
