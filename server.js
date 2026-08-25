@@ -22,8 +22,13 @@ app.use((req, res, next) => {
   next();
 });
 
+// ১০০K ট্রাফিকের জন্য ২৪ ঘণ্টা মেমোরি ক্যাশ
 const streamCache = new Map();
-const CACHE_TTL = 3 * 60 * 60 * 1000;
+const CACHE_TTL = 24 * 60 * 60 * 1000;
+
+// সমসাময়িক রিকোয়েস্ট লকার (একই টাইটেলে মাল্টিপল ব্রাউজার ওপেন বন্ধ রাখার জন্য)
+const pendingScrapes = new Map();
+
 let globalBrowser = null;
 
 async function getWarmBrowser() {
@@ -102,7 +107,7 @@ async function resolveDubStream(params) {
     }
   } catch (e) {}
 
-  return `https://megaplay.buzz/stream/s-2/${id}/dub`;
+  return `https://vidsrc.sbs/embed/tv/${id}/${params.season}/${episode}?dub=1`;
 }
 
 // ========================================================
@@ -136,7 +141,7 @@ async function fastScrape(browser, targetUrl) {
   page.on('request', (req) => {
     const type = req.resourceType();
     const url = req.url();
-    if (['image', 'stylesheet', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick')) {
+    if (['image', 'stylesheet', 'font', 'media'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
       req.abort();
     } else {
       req.continue();
@@ -161,7 +166,7 @@ async function fastScrape(browser, targetUrl) {
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
       await page.evaluate(() => {
         const btn = document.querySelector('video, button, #play, .play-btn');
         if (btn) btn.click();
@@ -174,12 +179,12 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 5000);
+    }, 4500);
   });
 }
 
 // ========================================================
-// ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER (ROBUST AUTO-TRIGGER)
+// ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
 // ========================================================
 async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsPly') {
   const page = await browser.newPage();
@@ -202,19 +207,16 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
-      // মাল্টি-ফ্রেম অটো ক্লিক ইঞ্জিন
       const triggerPlayback = async () => {
         const frames = [page.mainFrame(), ...page.frames()];
         for (const frame of frames) {
           try {
             await frame.evaluate((srvName) => {
-              // ১. প্লে বোতাম ক্লিক
               const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
               if (btn) btn.click();
 
-              // ২. সার্ভার ড্রপডাউন বাটন ওপেন
               const allElements = Array.from(document.querySelectorAll('*'));
               const dropdown = allElements.find(el => {
                 const t = (el.innerText || el.textContent || '').trim();
@@ -222,7 +224,6 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
               });
               if (dropdown) dropdown.click();
 
-              // ৩. টার্গেট সার্ভার নির্বাচন
               const serverOption = allElements.find(el => {
                 const t = (el.innerText || el.textContent || '').trim();
                 return (
@@ -241,7 +242,7 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
       };
 
       await triggerPlayback();
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1200));
       await triggerPlayback();
 
     } catch (e) {}
@@ -252,7 +253,7 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 9000);
+    }, 7000);
   });
 }
 
@@ -272,7 +273,7 @@ function parseParams(query) {
 }
 
 // ========================================================
-// ৪. মেইন JSON RESOLVER API
+// ৪. মেইন JSON RESOLVER API (HIGH TRAFFIC OPTIMIZED)
 // ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
@@ -293,9 +294,10 @@ app.get('/api/resolve-stream', async (req, res) => {
   }
 
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-  const cached = streamCache.get(cacheKey);
 
-  if (cached && (Date.now() - cached.time < CACHE_TTL)) {
+  // ১. মেমোরি ক্যাশ হিট চেক (মিলিসেকেন্ড রেসপন্স)
+  if (streamCache.has(cacheKey)) {
+    const cached = streamCache.get(cacheKey);
     return res.json({
       success: true,
       isEmbed: false,
@@ -305,46 +307,68 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  try {
-    const browser = await getWarmBrowser();
-    const urls = getWebProviderUrls(params);
-    let streamUrl = null;
-    let usedUrl = '';
-
-    for (const url of urls) {
-      streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        usedUrl = url;
-        break;
+  // ২. কনকারেন্সি লকার (একই টাইটেলের জন্য মাত্র ১টি ব্রাউজার সেশন ওপেন হবে)
+  if (pendingScrapes.has(cacheKey)) {
+    try {
+      const result = await pendingScrapes.get(cacheKey);
+      if (result) {
+        return res.json({
+          success: true,
+          isEmbed: false,
+          streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
+          rawUrl: result.url,
+          type: params.typeStr
+        });
       }
+    } catch (e) {}
+  }
+
+  // ৩. নতুন স্ক্র্যাপ টাস্ক
+  const scrapeTask = (async () => {
+    try {
+      const browser = await getWarmBrowser();
+      const urls = getWebProviderUrls(params);
+      for (const url of urls) {
+        const streamUrl = await fastScrape(browser, url);
+        if (streamUrl) {
+          const data = { url: streamUrl, ref: url, time: Date.now() };
+          streamCache.set(cacheKey, data);
+          return data;
+        }
+      }
+      return null;
+    } catch (err) {
+      return null;
+    } finally {
+      pendingScrapes.delete(cacheKey);
     }
+  })();
 
-    if (streamUrl) {
-      streamCache.set(cacheKey, { url: streamUrl, ref: usedUrl, time: Date.now() });
-      return res.json({
-        success: true,
-        isEmbed: false,
-        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(usedUrl)}`,
-        rawUrl: streamUrl,
-        type: params.typeStr
-      });
-    }
+  pendingScrapes.set(cacheKey, scrapeTask);
 
-    const fallbackEmbed = params.isTv 
-      ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
-      : `https://player.autoembed.cc/embed/movie/${params.id}`;
+  const finalResult = await scrapeTask;
 
+  if (finalResult) {
     return res.json({
       success: true,
-      isEmbed: true,
-      streamUrl: fallbackEmbed,
-      embedUrl: fallbackEmbed,
+      isEmbed: false,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
+      rawUrl: finalResult.url,
       type: params.typeStr
     });
-
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
   }
+
+  const fallbackEmbed = params.isTv 
+    ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
+    : `https://player.autoembed.cc/embed/movie/${params.id}`;
+
+  return res.json({
+    success: true,
+    isEmbed: true,
+    streamUrl: fallbackEmbed,
+    embedUrl: fallbackEmbed,
+    type: params.typeStr
+  });
 });
 
 // ========================================================
@@ -387,7 +411,6 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
       });
     }
 
-    // যদি স্ট্রিম ডিরেক্ট স্ক্র্যাপ না হয় তবে সেফ ফলব্যাক ডাইরেক্ট এম্বেড রিটার্ন করবে
     return res.json({
       success: true,
       isEmbed: true,
@@ -431,7 +454,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         'Origin': ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      timeout: 20000
+      timeout: 15000
     });
 
     if (targetUrl.includes('.m3u8')) {
@@ -475,7 +498,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal TMDB Scraper & DUB Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
