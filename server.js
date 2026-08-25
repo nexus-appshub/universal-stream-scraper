@@ -213,21 +213,13 @@ const ALLOWED_ORIGINS = [
   'https://homeairtv.xubilaswebdevcorp.shop',
   'https://anime.hmair.xyz',
   'https://hmair.xyz',
+  'https://www.hmair.xyz',
+  'https://2.0.hmair.xyz',
   'http://localhost:3000',
   'http://localhost:5173'
 ];
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
-      return callback(null, true);
-    }
-    return callback(new Error('Access Denied: Hotlinking Prohibited'));
-  },
-  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
-  allowedHeaders: '*'
-}));
-
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -333,19 +325,19 @@ function getWebProviderUrls(params) {
   if (isTv) {
     return [
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
+      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
+      `https://vidlink.pro/tv/${id}/${season}/${episode}`
     ];
   }
 
   return [
     `https://vidnest.fun/movie/${id}`,
-    `https://player.autoembed.cc/embed/movie/${id}`,
     `https://vidsrc.sbs/embed/movie/${id}`,
     `https://vidrock.net/embed/movie/${id}`,
-    `https://vidsrc.xyz/embed/movie?tmdb=${id}`
+    `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
+    `https://vidlink.pro/movie/${id}`
   ];
 }
 
@@ -385,7 +377,6 @@ async function fastScrape(browser, targetUrl) {
     try {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 9000 });
 
-      // মাল্টি-লেয়ার ক্লিক ট্রিগার (যাতে কোনো এপিসোডের প্লে বাটন মিস না হয়)
       const triggerPlay = async () => {
         const frames = [page.mainFrame(), ...page.frames()];
         for (const frame of frames) {
@@ -401,7 +392,7 @@ async function fastScrape(browser, targetUrl) {
       };
 
       await triggerPlay();
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 1200));
       await triggerPlay();
 
     } catch (e) {}
@@ -412,7 +403,7 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 5500);
+    }, 6000);
   });
 }
 
@@ -588,9 +579,10 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
+  // Active Safe Fallback Embed (No dead autoembed.cc)
   const fallbackEmbed = params.isTv 
-    ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://player.autoembed.cc/embed/movie/${params.id}`;
+    ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
+    : `https://vidsrc.sbs/embed/movie/${params.id}`;
 
   return res.json({
     success: true,
@@ -627,153 +619,4 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
       ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
       : `https://vidsrc.sbs/embed/movie/${params.id}`;
 
-    const streamUrl = await scrapeVidSrcMultiLang(browser, targetUrl, params.server);
-
-    if (streamUrl) {
-      streamCache.set(cacheKey, { url: streamUrl, ref: targetUrl, time: Date.now() });
-      return res.json({
-        success: true,
-        isEmbed: false,
-        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`,
-        rawUrl: streamUrl,
-        server: params.server,
-        type: params.typeStr
-      });
-    }
-
-    return res.json({
-      success: true,
-      isEmbed: true,
-      streamUrl: targetUrl,
-      embedUrl: targetUrl,
-      server: params.server,
-      type: params.typeStr
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ========================================================
-// ৭. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও লাইভ পাইপিং)
-// ========================================================
-async function pipeMediaTunnel(req, res, targetUrl, referer) {
-  try {
-    let cleanUrl = targetUrl;
-    while (cleanUrl.includes('%3A') || cleanUrl.includes('%2F')) {
-      try {
-        const decoded = decodeURIComponent(cleanUrl);
-        if (decoded === cleanUrl) break;
-        cleanUrl = decoded;
-      } catch (e) {
-        break;
-      }
-    }
-
-    const domain = new URL(cleanUrl).origin;
-    const ref = referer ? decodeURIComponent(referer) : domain;
-    const protocol = req.headers['x-forwarded-proto'] || 'https';
-    const host = req.get('host');
-    const proxyBase = `${protocol}://${host}/api/stream-proxy`;
-
-    const response = await axios({
-      method: 'GET',
-      url: cleanUrl,
-      responseType: cleanUrl.includes('.m3u8') ? 'text' : 'stream',
-      headers: {
-        'Referer': ref,
-        'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      timeout: 20000
-    });
-
-    if (cleanUrl.includes('.m3u8')) {
-      const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
-      const lines = response.data.split('\n');
-
-      const rewritten = lines.map(line => {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
-          let segmentUrl = trimmed;
-          if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
-            segmentUrl = new URL(trimmed, baseUrl).href;
-          }
-          return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
-        }
-        return line;
-      }).join('\n');
-
-      res.set({
-        'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*'
-      });
-      return res.send(rewritten);
-    }
-
-    res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp4',
-      'Access-Control-Allow-Origin': '*',
-      'Accept-Ranges': 'bytes'
-    });
-
-    response.data.pipe(res);
-  } catch (error) {
-    res.status(502).send('Stream Tunnel Error');
-  }
-}
-
-app.get('/api/stream-proxy', async (req, res) => {
-  const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
-  const acceptHeader = req.headers['accept'] || '';
-
-  const isAuthorized = 
-    ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
-    refererHeader.includes('xubilas') ||
-    refererHeader.includes('hmair');
-
-  if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
-    res.set('Content-Type', 'text/html; charset=utf-8');
-    return res.status(403).send(ACCESS_DENIED_HTML);
-  }
-
-  const { url, referer } = req.query;
-  if (!url) return res.status(400).send('URL missing');
-  return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
-});
-
-// ৮. MovieBox Native Play Endpoint (ক্যাশ মিস হলে অটো-স্ক্র্যাপ সাপোর্ট)
-app.get('/api/moviebox/play', async (req, res) => {
-  const params = parseParams(req.query);
-  if (params.lang === 'dub') {
-    const dubEmbed = await resolveDubStream(params);
-    return res.redirect(dubEmbed);
-  }
-
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-  let cached = streamCache.get(cacheKey);
-
-  if (cached) {
-    return pipeMediaTunnel(req, res, cached.url, cached.ref);
-  }
-
-  // ক্যাশে না থাকলে ইনস্ট্যান্ট ব্যাকগ্রাউন্ড স্ক্র্যাপ
-  try {
-    const browser = await getWarmBrowser();
-    const urls = getWebProviderUrls(params);
-    for (const url of urls) {
-      const streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        streamCache.set(cacheKey, { url: streamUrl, ref: url, time: Date.now() });
-        return pipeMediaTunnel(req, res, streamUrl, url);
-      }
-    }
-  } catch (e) {}
-
-  return res.status(404).send('Stream Offline');
-});
-
-app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper & Anti-Hotlink Engine Online!'));
-
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
+    const strea
