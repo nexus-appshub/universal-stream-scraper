@@ -107,7 +107,7 @@ async function executeTargetScrape(browser, provider) {
           for (const frame of frames) {
             try {
               await frame.evaluate(() => {
-                const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button'));
+                const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
                 if (elements.length > 0) elements[0].click();
               });
             } catch (e) {}
@@ -151,7 +151,7 @@ function parseParams(query) {
   return { id: targetId, typeStr, isTv, season, episode, lang, title };
 }
 
-// ১০০% পিওর নেটিভ স্ক্র্যাপ API (জিরো এম্বেড)
+// ১. মেইন রেজলভার JSON API
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
@@ -207,6 +207,30 @@ app.get('/api/resolve-stream', async (req, res) => {
   });
 });
 
+// ২. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
+app.get('/api/moviebox/play', async (req, res) => {
+  const params = parseParams(req.query);
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
+  let cached = streamCache.get(cacheKey);
+
+  if (cached) {
+    return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  }
+
+  try {
+    const browser = await getClusterBrowser();
+    const providers = getGlobalProviders(params);
+    const result = await raceAllProviders(browser, providers);
+    if (result) {
+      streamCache.set(cacheKey, { url: result.streamUrl, ref: result.usedUrl, provider: result.providerName, time: Date.now() });
+      return pipeMediaTunnel(req, res, result.streamUrl, result.usedUrl);
+    }
+  } catch (e) {}
+
+  return res.status(404).send('Stream Offline');
+});
+
+// ৩. সেগমেন্ট প্রক্সি টানেল
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     let cleanUrl = targetUrl;
@@ -280,5 +304,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
+app.get('/', (req, res) => res.send('🚀 Universal Stream Scraper Engine Online!'));
+
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 Pure Native Scraper Online on ${PORT}`));
+app.listen(PORT, () => console.log(`Active on ${PORT}`));
