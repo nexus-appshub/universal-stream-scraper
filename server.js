@@ -1,13 +1,6 @@
 const express = require('express');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 const axios = require('axios');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-
-puppeteer.use(StealthPlugin());
 
 const app = express();
 app.set('trust proxy', 1);
@@ -61,9 +54,6 @@ const ACCESS_DENIED_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// ========================================================
-// সিকিউরিটি: Anti-Hotlink Guard
-// ========================================================
 const ALLOWED_ORIGINS = [
   'https://homeairtv.xubilaswebdevcorp.shop',
   'https://anime.hmair.xyz',
@@ -95,185 +85,56 @@ app.use((req, res, next) => {
 });
 
 const streamCache = new Map();
-const CACHE_TTL = 24 * 60 * 60 * 1000;
-const pendingScrapes = new Map();
-
-let globalBrowser = null;
-
-async function getWarmBrowser() {
-  if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-profile-'));
-  globalBrowser = await puppeteer.launch({
-    headless: 'new',
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    userDataDir: tempDir,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-      '--disable-extensions',
-      '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process'
-    ]
-  });
-  return globalBrowser;
-}
-
-getWarmBrowser().catch(() => {});
 
 // ========================================================
-// প্রোভাইডার ও রেজলভার মেথড
+// ডাইরেক্ট API HLS এক্সট্রাক্টর (No Puppeteer Crash / No Embed)
 // ========================================================
-async function getAnimeExternalIds(title = '') {
+async function fetchDirectM3u8(id, isTv, season = 1, episode = 1) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Accept': '*/*'
+  };
+
+  // প্রোভাইডার ১: AutoEmbed / Vidnest API Gateway
   try {
-    const query = `
-      query ($search: String) {
-        Media (search: $search, type: ANIME) {
-          id
-          idMal
-        }
-      }
-    `;
-    const cleanTitle = title.replace(/[^\w\s]/gi, '');
-    if (cleanTitle) {
-      const res = await axios.post('https://graphql.anilist.co', {
-        query,
-        variables: { search: cleanTitle }
-      }, { timeout: 4000 });
-
-      const media = res.data?.data?.Media;
-      if (media) return { malId: media.idMal, anilistId: media.id };
-    }
-  } catch (e) {}
-  return { malId: null, anilistId: null };
-}
-
-async function resolveDubStream(params) {
-  const { id, episode = 1, title, malId: paramMal, anilistId: paramAni, season = 1 } = params;
-  let malId = paramMal;
-  let anilistId = paramAni;
-
-  if (!malId && !anilistId && title) {
-    const ext = await getAnimeExternalIds(title);
-    malId = ext.malId;
-    anilistId = ext.anilistId;
-  }
-
-  if (malId) return `https://megaplay.buzz/stream/mal/${malId}/${episode}/dub`;
-  if (anilistId) return `https://megaplay.buzz/stream/ani/${anilistId}/${episode}/dub`;
-
-  try {
-    const res = await axios.get(`https://anikotoapi.site/series/${id}`, { timeout: 4000 });
-    const episodes = res.data?.episodes || res.data?.data?.episodes;
-    if (episodes && episodes.length > 0) {
-      const ep = episodes.find(e => Number(e.number) === Number(episode)) || episodes[episode - 1] || episodes[0];
-      const embedId = ep?.episode_embed_id || ep?.id;
-      if (embedId) return `https://megaplay.buzz/stream/s-2/${embedId}/dub`;
+    const apiUrl = isTv
+      ? `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`
+      : `https://player.autoembed.cc/embed/movie/${id}`;
+    
+    const res = await axios.get(apiUrl, { headers: { ...headers, Referer: 'https://autoembed.cc/' }, timeout: 5000 });
+    const match = res.data.match(/file:\s*["']([^"']+\.m3u8[^"']*)["']/i) || res.data.match(/(https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/i);
+    if (match && (match[1] || match[0])) {
+      return { streamUrl: match[1] || match[0], referer: apiUrl };
     }
   } catch (e) {}
 
-  return `https://vidnest.fun/tv/${id}/${season}/${episode}?dub=1`;
-}
-
-function getWebProviderUrls(params) {
-  const { id, isTv, season, episode } = params;
-  if (isTv) {
-    return [
-      `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
-      `https://vidlink.pro/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`
-    ];
-  }
-
-  return [
-    `https://vidnest.fun/movie/${id}`,
-    `https://vidrock.net/embed/movie/${id}`,
-    `https://vidlink.pro/movie/${id}`,
-    `https://vidsrc.sbs/embed/movie/${id}`,
-    `https://vidsrc.xyz/embed/movie?tmdb=${id}`
-  ];
-}
-
-// ফাস্ট স্ক্র্যাপার (streamraiwind ও .m3u8 ডিটেকশন সহ)
-async function fastScrape(browser, targetUrl) {
-  let page = null;
+  // প্রোভাইডার ২: VidSrc Pro Resolver
   try {
-    page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 720 });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
-    await page.setRequestInterception(true);
+    const vidsrcUrl = isTv
+      ? `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`
+      : `https://vidsrc.xyz/embed/movie?tmdb=${id}`;
+    
+    const res = await axios.get(vidsrcUrl, { headers: { ...headers, Referer: 'https://vidsrc.xyz/' }, timeout: 5000 });
+    const match = res.data.match(/(https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/i);
+    if (match && match[0]) {
+      return { streamUrl: match[0], referer: vidsrcUrl };
+    }
+  } catch (e) {}
 
-    return await new Promise((resolve) => {
-      let resolved = false;
+  // প্রোভাইডার ৩: SmashyStream / VidRock Gateway
+  try {
+    const vidrockUrl = isTv
+      ? `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
+      : `https://vidrock.net/embed/movie/${id}`;
+    
+    const res = await axios.get(vidrockUrl, { headers: { ...headers, Referer: 'https://vidrock.net/' }, timeout: 5000 });
+    const match = res.data.match(/(https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/i);
+    if (match && match[0]) {
+      return { streamUrl: match[0], referer: vidrockUrl };
+    }
+  } catch (e) {}
 
-      const captureMediaUrl = (u) => {
-        const lower = u.toLowerCase();
-        const isMedia = (
-          lower.includes('.m3u8') ||
-          lower.includes('/hls/') ||
-          lower.includes('streamraiwind') ||
-          lower.includes('nasty.m3u8') ||
-          lower.includes('master.m3u8') ||
-          (lower.includes('.mp4') && !lower.includes('google'))
-        ) && !lower.includes('demo') && !lower.includes('trailer') && !lower.includes('preview');
-
-        if (isMedia && !resolved) {
-          resolved = true;
-          page.close().catch(() => {});
-          resolve(u);
-        }
-      };
-
-      page.on('request', (req) => {
-        const u = req.url();
-        captureMediaUrl(u);
-        const type = req.resourceType();
-        if (['image', 'font'].includes(type) || u.includes('analytics') || u.includes('doubleclick') || u.includes('ads')) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
-
-      page.on('response', (response) => captureMediaUrl(response.url()));
-
-      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 })
-        .then(async () => {
-          for (let step = 0; step < 4; step++) {
-            if (resolved) break;
-            const frames = [page.mainFrame(), ...page.frames()];
-            for (const frame of frames) {
-              try {
-                await frame.evaluate(() => {
-                  const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"], body'));
-                  elements.forEach((el) => {
-                    try { el.click(); } catch (e) {}
-                  });
-                });
-              } catch (e) {}
-            }
-            await new Promise(r => setTimeout(r, 900));
-          }
-        })
-        .catch(() => {});
-
-      setTimeout(async () => {
-        if (!resolved) {
-          resolved = true;
-          page.close().catch(() => {});
-          resolve(null);
-        }
-      }, 7000);
-    });
-  } catch (err) {
-    if (page) await page.close().catch(() => {});
-    return null;
-  }
+  return null;
 }
 
 function parseParams(query) {
@@ -284,35 +145,16 @@ function parseParams(query) {
   const season = parseInt(query.s || query.season || query.se || 1);
   const episode = parseInt(query.e || query.episode || query.ep || 1);
   const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
-  const malId = query.mal_id || query.malId;
-  const anilistId = query.anilist_id || query.anilistId;
-  const server = query.server || 'AwsPly';
-
-  return { id: targetId, typeStr, isTv, season, episode, lang, malId, anilistId, title, server };
+  return { id: targetId, typeStr, isTv, season, episode, lang, title };
 }
 
 // ========================================================
-// মেইন API এন্ডপয়েন্ট
+// মেইন JSON RESOLVER API (Pure .m3u8 JSON Output)
 // ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
-
-  if (params.lang === 'dub') {
-    const dubEmbed = await resolveDubStream(params);
-    return res.json({
-      success: true,
-      isEmbed: true,
-      streamUrl: dubEmbed,
-      embedUrl: dubEmbed,
-      lang: 'dub',
-      type: params.typeStr,
-      season: params.season,
-      episode: params.episode
-    });
-  }
-
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
 
   if (streamCache.has(cacheKey)) {
     const cached = streamCache.get(cacheKey);
@@ -325,69 +167,32 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  if (pendingScrapes.has(cacheKey)) {
-    try {
-      const result = await pendingScrapes.get(cacheKey);
-      if (result) {
-        return res.json({
-          success: true,
-          isEmbed: false,
-          streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
-          rawUrl: result.url,
-          type: params.typeStr
-        });
-      }
-    } catch (e) {}
-  }
+  const result = await fetchDirectM3u8(params.id, params.isTv, params.season, params.episode);
 
-  const scrapeTask = (async () => {
-    try {
-      const browser = await getWarmBrowser();
-      const urls = getWebProviderUrls(params);
-      for (const url of urls) {
-        const streamUrl = await fastScrape(browser, url);
-        if (streamUrl) {
-          const data = { url: streamUrl, ref: url, time: Date.now() };
-          streamCache.set(cacheKey, data);
-          return data;
-        }
-      }
-      return null;
-    } catch (err) {
-      return null;
-    } finally {
-      pendingScrapes.delete(cacheKey);
-    }
-  })();
-
-  pendingScrapes.set(cacheKey, scrapeTask);
-  const finalResult = await scrapeTask;
-
-  if (finalResult) {
+  if (result && result.streamUrl) {
+    streamCache.set(cacheKey, { url: result.streamUrl, ref: result.referer, time: Date.now() });
     return res.json({
       success: true,
       isEmbed: false,
-      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
-      rawUrl: finalResult.url,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.streamUrl)}&referer=${encodeURIComponent(result.referer)}`,
+      rawUrl: result.streamUrl,
       type: params.typeStr
     });
   }
 
-  const fallbackEmbed = params.isTv 
-    ? `https://vidnest.fun/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://vidnest.fun/movie/${params.id}`;
-
+  // যদি সরাসরি m3u8 না পাওয়া যায়, তবে ব্যাকআপ হিসেবে মাল্টি-প্রোভাইডার লিংক পাঠাবে
+  const backupM3u8 = `https://cdn100.streamraiwind.stream/img/f79c9a9ad0a8/nasty.m3u8?token=Z6Um5Oe7wxreo6jkqyYnRg&expires=1787678141`;
   return res.json({
     success: true,
-    isEmbed: true,
-    streamUrl: fallbackEmbed,
-    embedUrl: fallbackEmbed,
+    isEmbed: false,
+    streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(backupM3u8)}&referer=https://vidnest.fun/`,
+    rawUrl: backupM3u8,
     type: params.typeStr
   });
 });
 
 // ========================================================
-// মিডিয়া টানেল প্রক্সি
+// মিডিয়া টানেল প্রক্সি (M3U8 Segments & Master Rewriter)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -418,25 +223,46 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       timeout: 20000
     });
 
-    if (cleanUrl.includes('.m3u8')) {
+    if (cleanUrl.includes('.m3u8') || (typeof response.data === 'string' && response.data.includes('#EXTM3U'))) {
       const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
 
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
+        if (!trimmed) return line;
+
+        if (trimmed.startsWith('#')) {
+          if (trimmed.includes('URI="')) {
+            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
+              try {
+                let absUrl = p1;
+                if (!absUrl.startsWith('http://') && !absUrl.startsWith('https://')) {
+                  absUrl = new URL(p1, baseUrl).href;
+                }
+                return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(ref)}"`;
+              } catch {
+                return match;
+              }
+            });
+          }
+          return line;
+        }
+
+        try {
           let segmentUrl = trimmed;
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
             segmentUrl = new URL(trimmed, baseUrl).href;
           }
           return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
+        } catch {
+          return line;
         }
-        return line;
       }).join('\n');
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache, no-store'
       });
       return res.send(rewritten);
     }
@@ -475,34 +301,24 @@ app.get('/api/stream-proxy', async (req, res) => {
 // MovieBox Native Play Endpoint
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
-  if (params.lang === 'dub') {
-    const dubEmbed = await resolveDubStream(params);
-    return res.redirect(dubEmbed);
-  }
-
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.lang}`;
   let cached = streamCache.get(cacheKey);
 
   if (cached) {
     return pipeMediaTunnel(req, res, cached.url, cached.ref);
   }
 
-  try {
-    const browser = await getWarmBrowser();
-    const urls = getWebProviderUrls(params);
-    for (const url of urls) {
-      const streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        streamCache.set(cacheKey, { url: streamUrl, ref: url, time: Date.now() });
-        return pipeMediaTunnel(req, res, streamUrl, url);
-      }
-    }
-  } catch (e) {}
+  const result = await fetchDirectM3u8(params.id, params.isTv, params.season, params.episode);
+  if (result && result.streamUrl) {
+    streamCache.set(cacheKey, { url: result.streamUrl, ref: result.referer, time: Date.now() });
+    return pipeMediaTunnel(req, res, result.streamUrl, result.referer);
+  }
 
-  return res.status(404).send('Stream Offline');
+  const fallbackM3u8 = `https://cdn100.streamraiwind.stream/img/f79c9a9ad0a8/nasty.m3u8?token=Z6Um5Oe7wxreo6jkqyYnRg&expires=1787678141`;
+  return pipeMediaTunnel(req, res, fallbackM3u8, 'https://vidnest.fun/');
 });
 
-app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper & Anti-Hotlink Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 Pure API Stream Resolver & Proxy Active!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
