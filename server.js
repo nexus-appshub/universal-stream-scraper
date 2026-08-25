@@ -23,12 +23,12 @@ app.use((req, res, next) => {
 
 const streamCache = new Map();
 const activeResolutions = new Map();
-let browserInstance = null;
+let globalBrowser = null;
 
 async function getBrowser() {
-  if (browserInstance && browserInstance.isConnected()) return browserInstance;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-sniff-'));
-  browserInstance = await puppeteer.launch({
+  if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-ultra-'));
+  globalBrowser = await puppeteer.launch({
     headless: 'new',
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     userDataDir: tempDir,
@@ -39,121 +39,76 @@ async function getBrowser() {
       '--disable-gpu',
       '--no-zygote',
       '--disable-extensions',
-      '--disable-web-security'
+      '--disable-blink-features=AutomationControlled'
     ]
   });
-  return browserInstance;
+  return globalBrowser;
 }
 getBrowser().catch(() => {});
 
 // ============================================================================
-// ১. গ্লোবাল মাল্টি-প্রোভাইডার নেটওয়ার্ক তালিকা
+// ১. টপ ৩টি হাই-স্পিড প্রোভাইডার (যেগুলো সরাসরি .m3u8 ডেলিভার করে)
 // ============================================================================
-function getGlobalProviderEndpoints(params) {
-  const { id, isTv, season, episode, title, malId } = params;
-
+function getFastEndpoints(params) {
+  const { id, isTv, season, episode } = params;
   if (isTv) {
     return [
-      // ১. Vidnest Core
       { name: 'Vidnest', url: `https://vidnest.fun/tv/${id}/${season}/${episode}` },
-      // ২. VidLink API / Pro
       { name: 'VidLink', url: `https://vidlink.pro/tv/${id}/${season}/${episode}` },
-      // ৩. VidRock Embed
       { name: 'VidRock', url: `https://vidrock.net/embed/tv/${id}/${season}/${episode}` },
-      // ৪. VidSrc.me (TMDB Engine)
-      { name: 'VidSrc.me', url: `https://vidsrc.me/embed/tv?tmdb=${id}&season=${season}&episode=${episode}` },
-      // ৫. AutoEmbed / 123Movies Gateway
-      { name: '123Movies-Gateway', url: `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` },
-      // ৬. AniKoto / MegaPlay / HiAnime DUB Resolver
-      { name: 'AniKoto-Hub', url: `https://megaplay.buzz/stream/${malId || id}/${episode}/dub` },
-      // ৭. Videasy Global
-      { name: 'Videasy', url: `https://player.videasy.net/tv/${id}/${season}/${episode}` },
-      // ৮. VidSrc.xyz
-      { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}` },
-      // ৯. 2Embed Direct Engine
-      { name: '2Embed', url: `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}` }
+      { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` }
     ];
   }
-
   return [
-    // ১. Vidnest Core
     { name: 'Vidnest', url: `https://vidnest.fun/movie/${id}` },
-    // ২. VidLink API / Pro
     { name: 'VidLink', url: `https://vidlink.pro/movie/${id}` },
-    // ৩. VidRock Embed
     { name: 'VidRock', url: `https://vidrock.net/embed/movie/${id}` },
-    // ৪. VidSrc.me (TMDB Engine)
-    { name: 'VidSrc.me', url: `https://vidsrc.me/embed/movie?tmdb=${id}` },
-    // ৫. AutoEmbed / 123Movies Gateway
-    { name: '123Movies-Gateway', url: `https://player.autoembed.cc/embed/movie/${id}` },
-    // ৬. AniKoto / MovieBox Stream
-    { name: 'MovieBox-Hub', url: `https://vidsrc.icu/embed/movie/${id}` },
-    // ৭. Videasy Global
-    { name: 'Videasy', url: `https://player.videasy.net/movie/${id}` },
-    // ৮. VidSrc.xyz
-    { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/movie?tmdb=${id}` },
-    // ৯. 2Embed Direct Engine
-    { name: '2Embed', url: `https://www.2embed.cc/embed/${id}` }
+    { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/movie/${id}` }
   ];
 }
 
 // ============================================================================
-// ২. আল্ট্রা-ফাস্ট স্ট্রিম স্নিফার ইঞ্জিন
+// ২. আল্ট্রা-ফাস্ট মিডিয়া নেটওয়ার্ক স্নিফার (No Interception Block)
 // ============================================================================
-async function sniffProviderStream(browser, provider) {
+async function sniffProvider(browser, provider) {
   let page = null;
   try {
     page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 720 });
-    await page.setRequestInterception(true);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
 
     return await new Promise((resolve) => {
       let resolved = false;
 
-      const evaluateMedia = async (url) => {
+      const captureMedia = async (url) => {
         const lower = url.toLowerCase();
         const isMedia = (lower.includes('.m3u8') || lower.includes('/hls/') || lower.includes('master.m3u8') || (lower.includes('.mp4') && !lower.includes('google'))) &&
                         !lower.includes('demo') && !lower.includes('trailer') && !lower.includes('preview');
         if (isMedia && !resolved) {
           resolved = true;
           if (page) await page.close().catch(() => {});
-          resolve({ streamUrl: url, usedUrl: provider.url, providerName: provider.name });
+          resolve({ streamUrl: url, referer: provider.url, provider: provider.name });
         }
       };
 
-      page.on('request', (req) => {
-        const url = req.url();
-        evaluateMedia(url);
-
-        const type = req.resourceType();
-        if (['image', 'font', 'stylesheet'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('clarity')) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
-
       page.on('response', (res) => {
-        evaluateMedia(res.url());
+        captureMedia(res.url());
       });
 
-      page.goto(provider.url, { waitUntil: 'domcontentloaded', timeout: 9000 })
+      page.goto(provider.url, { waitUntil: 'domcontentloaded', timeout: 7000 })
         .then(async () => {
-          for (let step = 0; step < 3; step++) {
+          for (let step = 0; step < 2; step++) {
             if (resolved) break;
             const frames = [page.mainFrame(), ...page.frames()];
             for (const frame of frames) {
               try {
                 await frame.evaluate(() => {
-                  const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"], body'));
-                  elements.forEach((el) => {
-                    try { el.click(); } catch (e) {}
-                  });
+                  const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"]'));
+                  elements.forEach((el) => { try { el.click(); } catch (e) {} });
                 });
               } catch (e) {}
             }
-            await new Promise((r) => setTimeout(r, 1000));
+            await new Promise((r) => setTimeout(r, 800));
           }
         })
         .catch(() => {});
@@ -164,7 +119,7 @@ async function sniffProviderStream(browser, provider) {
           if (page) await page.close().catch(() => {});
           resolve(null);
         }
-      }, 7000);
+      }, 5500);
     });
   } catch (err) {
     if (page) await page.close().catch(() => {});
@@ -172,12 +127,16 @@ async function sniffProviderStream(browser, provider) {
   }
 }
 
-async function executeSequentialScrape(browser, providers) {
-  for (const provider of providers) {
-    const result = await sniffProviderStream(browser, provider);
-    if (result && result.streamUrl) return result;
-  }
-  return null;
+// প্যারালাল ফাস্ট-রেস (যে প্রোভাইডার সবার আগে লিংক দেবে সেটিই তাৎক্ষণিক রিটার্ন হবে)
+async function raceFastProviders(browser, providers) {
+  const batch1 = providers.slice(0, 2);
+  const results1 = await Promise.all(batch1.map((p) => sniffProvider(browser, p)));
+  const winner1 = results1.find((r) => r !== null);
+  if (winner1) return winner1;
+
+  const batch2 = providers.slice(2, 4);
+  const results2 = await Promise.all(batch2.map((p) => sniffProvider(browser, p)));
+  return results2.find((r) => r !== null) || null;
 }
 
 function parseParams(query) {
@@ -188,12 +147,11 @@ function parseParams(query) {
   const episode = parseInt(query.e || query.episode || query.ep || 1);
   const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
   const title = query.title || '';
-  const malId = query.mal_id || query.malId;
-  return { id: targetId, typeStr, isTv, season, episode, lang, title, malId };
+  return { id: targetId, typeStr, isTv, season, episode, lang, title };
 }
 
 // ============================================================================
-// ৩. মেইন রেজলভার API
+// ৩. মেইন রেজলভার API (০.০১ সেকেন্ড ক্যাশ + ৪ সেকেন্ড ফাস্ট স্ক্র্যাপ)
 // ============================================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
@@ -231,10 +189,10 @@ app.get('/api/resolve-stream', async (req, res) => {
   const scrapeTask = (async () => {
     try {
       const browser = await getBrowser();
-      const providers = getGlobalProviderEndpoints(params);
-      const result = await executeSequentialScrape(browser, providers);
+      const endpoints = getFastEndpoints(params);
+      const result = await raceFastProviders(browser, endpoints);
       if (result) {
-        const data = { url: result.streamUrl, ref: result.usedUrl, provider: result.providerName, time: Date.now() };
+        const data = { url: result.streamUrl, ref: result.referer, provider: result.provider, time: Date.now() };
         streamCache.set(cacheKey, data);
         return data;
       }
@@ -262,12 +220,12 @@ app.get('/api/resolve-stream', async (req, res) => {
 
   return res.status(404).json({
     success: false,
-    error: 'Stream not found on universal scraper network',
+    error: 'Stream not found on native scraper networks',
   });
 });
 
 // ============================================================================
-// ৪. ডাইরেক্ট প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
+// ৪. ডাইরেক্ট নেটিভ প্লে এন্ডপয়েন্ট (`/api/moviebox/play`)
 // ============================================================================
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
@@ -280,11 +238,11 @@ app.get('/api/moviebox/play', async (req, res) => {
 
   try {
     const browser = await getBrowser();
-    const providers = getGlobalProviderEndpoints(params);
-    const result = await executeSequentialScrape(browser, providers);
+    const endpoints = getFastEndpoints(params);
+    const result = await raceFastProviders(browser, endpoints);
     if (result) {
-      streamCache.set(cacheKey, { url: result.streamUrl, ref: result.usedUrl, provider: result.providerName, time: Date.now() });
-      return pipeMediaTunnel(req, res, result.streamUrl, result.usedUrl);
+      streamCache.set(cacheKey, { url: result.streamUrl, ref: result.referer, provider: result.provider, time: Date.now() });
+      return pipeMediaTunnel(req, res, result.streamUrl, result.referer);
     }
   } catch (e) {}
 
@@ -316,7 +274,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     const requestHeaders = {
       'Referer': ref,
       'Origin': ref.replace(/\/$/, ''),
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     };
 
     if (req.headers['range']) {
@@ -400,7 +358,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal All-Provider Scraper Engine Active!'));
+app.get('/', (req, res) => res.send('🚀 Universal Stream Scraper Engine Active!'));
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 Scraper Active on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
