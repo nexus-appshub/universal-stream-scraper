@@ -6,7 +6,6 @@ const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const CryptoJS = require('crypto-js');
 
 puppeteer.use(StealthPlugin());
 
@@ -97,8 +96,7 @@ function getGlobalProviders(params) {
       { name: 'VidRock', url: `https://vidrock.net/embed/tv/${id}/${season}/${episode}` },
       { name: 'Videasy', url: `https://player.videasy.net/tv/${id}/${season}/${episode}` },
       { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}` },
-      { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` },
-      { name: 'EmbedSU', url: `https://embed.su/embed/tv/${id}/${season}/${episode}` }
+      { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` }
     ];
   }
 
@@ -109,8 +107,7 @@ function getGlobalProviders(params) {
     { name: 'VidRock', url: `https://vidrock.net/embed/movie/${id}` },
     { name: 'Videasy', url: `https://player.videasy.net/movie/${id}` },
     { name: 'VidSrc.xyz', url: `https://vidsrc.xyz/embed/movie?tmdb=${id}` },
-    { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/movie/${id}` },
-    { name: 'EmbedSU', url: `https://embed.su/embed/movie/${id}` }
+    { name: 'AutoEmbed', url: `https://player.autoembed.cc/embed/movie/${id}` }
   ];
 }
 
@@ -180,19 +177,17 @@ async function executeTargetScrape(browser, provider) {
 }
 
 // ============================================================================
-// ৫. প্যারালাল ফাস্ট-রেস স্ক্র্যাপার ইঞ্জিন (World Fast Engine)
+// ৫. প্যারালাল ফাস্ট-রেস স্ক্র্যাপার ইঞ্জিন
 // ============================================================================
 async function raceAllProviders(browser, providers) {
   const batch1 = providers.slice(0, 3);
   const batch2 = providers.slice(3);
 
-  // প্রথম ৩টি প্রধান প্রোভাইডারে প্যারালাল রিকোয়েস্ট (Fastest Response Wins)
   const promisesBatch1 = batch1.map(p => executeTargetScrape(browser, p));
   const resultsBatch1 = await Promise.all(promisesBatch1);
   const winner1 = resultsBatch1.find(r => r !== null);
   if (winner1) return winner1;
 
-  // ব্যাকআপ ব্যাচে প্যারালাল সার্চ
   const promisesBatch2 = batch2.map(p => executeTargetScrape(browser, p));
   const resultsBatch2 = await Promise.all(promisesBatch2);
   const winner2 = resultsBatch2.find(r => r !== null);
@@ -231,7 +226,7 @@ function parseParams(query) {
 }
 
 // ============================================================================
-// ৭. মেইন রেজলভার API (High-Traffic Optimized)
+// ৭. মেইন রেজলভার API
 // ============================================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
@@ -253,7 +248,6 @@ app.get('/api/resolve-stream', async (req, res) => {
 
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
-  // ১. মেমোরি ক্যাশ হিট চেক (০.০১ সেকেন্ড রেসপন্স)
   if (memoryCache.has(cacheKey)) {
     const cached = memoryCache.get(cacheKey);
     return res.json({
@@ -266,7 +260,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // ২. কনকারেন্সি লকার (একই টাইটেল বারবার স্ক্র্যাপ হওয়া আটকায়)
   if (activeResolutions.has(cacheKey)) {
     try {
       const result = await activeResolutions.get(cacheKey);
@@ -283,7 +276,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     } catch (e) {}
   }
 
-  // ৩. প্যারালাল ফাস্ট স্ক্র্যাপিং টাস্ক
   const scrapeTask = (async () => {
     try {
       const browser = await getClusterBrowser();
@@ -316,7 +308,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // ৪. কোনো সার্ভারে মিডিয়া স্ট্রিম না পেলে সেফ এম্বেড
   const fallbackEmbed = params.isTv 
     ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
     : `https://vidsrc.sbs/embed/movie/${params.id}`;
@@ -331,7 +322,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ============================================================================
-// ৮. ডাইনামিক মিডিয়া টানেল প্রক্সি (সেগমেন্ট রিকার্সিভ রিরাইটার)
+// ৮. ফুল ডিপ-লেভেল HLS মাস্টার ও সেগমেন্ট প্রক্সি টানেল (100% বাফারিং ফিক্স)
 // ============================================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -352,47 +343,81 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     const host = req.get('host');
     const proxyBase = `${protocol}://${host}/api/stream-proxy`;
 
+    const requestHeaders = {
+      'Referer': ref,
+      'Origin': ref.replace(/\/$/, ''),
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    };
+
+    if (req.headers['range']) {
+      requestHeaders['Range'] = req.headers['range'];
+    }
+
     const response = await axios({
       method: 'GET',
       url: cleanUrl,
       responseType: cleanUrl.includes('.m3u8') ? 'text' : 'stream',
-      headers: {
-        'Referer': ref,
-        'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      timeout: 20000
+      headers: requestHeaders,
+      timeout: 25000
     });
 
-    if (cleanUrl.includes('.m3u8')) {
+    if (cleanUrl.includes('.m3u8') || (typeof response.data === 'string' && response.data.includes('#EXTM3U'))) {
       const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
 
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
+        if (!trimmed) return line;
+
+        // এনক্রিপশন কী ও সাব-ম্যানিফেস্ট URI হ্যান্ডলিং (#EXT-X-KEY:METHOD=AES-128,URI="...")
+        if (trimmed.startsWith('#')) {
+          if (trimmed.includes('URI="')) {
+            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
+              try {
+                let absUrl = p1;
+                if (!absUrl.startsWith('http://') && !absUrl.startsWith('https://')) {
+                  absUrl = new URL(p1, baseUrl).href;
+                }
+                return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(ref)}"`;
+              } catch {
+                return match;
+              }
+            });
+          }
+          return line;
+        }
+
+        // সব মিডিয়া সেগমেন্ট (.ts, .m4s, .aac) এবং সাব-প্লেলিস্ট (.m3u8) প্রক্সির মাধ্যমে রুট করা
+        try {
           let segmentUrl = trimmed;
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
             segmentUrl = new URL(trimmed, baseUrl).href;
           }
           return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
+        } catch {
+          return line;
         }
-        return line;
       }).join('\n');
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
         'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-cache, no-store'
       });
       return res.send(rewritten);
     }
 
+    // ডাইরেক্ট বাইনারি ভিডিও স্ট্রিম (.ts / .mp4 চাঙ্ক)
     res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp4',
+      'Content-Type': response.headers['content-type'] || 'video/mp2t',
       'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes'
     });
+
+    if (response.headers['content-range']) {
+      res.set('Content-Range', response.headers['content-range']);
+      res.status(206);
+    }
 
     response.data.pipe(res);
   } catch (error) {
