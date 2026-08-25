@@ -213,13 +213,21 @@ const ALLOWED_ORIGINS = [
   'https://homeairtv.xubilaswebdevcorp.shop',
   'https://anime.hmair.xyz',
   'https://hmair.xyz',
-  'https://www.hmair.xyz',
-  'https://2.0.hmair.xyz',
   'http://localhost:3000',
   'http://localhost:5173'
 ];
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
+      return callback(null, true);
+    }
+    return callback(new Error('Access Denied: Hotlinking Prohibited'));
+  },
+  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+  allowedHeaders: '*'
+}));
+
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -229,8 +237,11 @@ app.use((req, res, next) => {
   next();
 });
 
+// ১০০K ট্রাফিকের জন্য ২৪ ঘণ্টা মেমোরি ক্যাশ
 const streamCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
+
+// কনকারেন্সি লকার
 const pendingScrapes = new Map();
 
 let globalBrowser = null;
@@ -248,8 +259,10 @@ async function getWarmBrowser() {
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--no-zygote',
+      '--single-process',
       '--disable-extensions',
-      '--disable-web-security'
+      '--blink-settings=imagesEnabled=false',
+      '--disable-remote-fonts'
     ]
   });
   return globalBrowser;
@@ -258,7 +271,7 @@ async function getWarmBrowser() {
 getWarmBrowser().catch(() => {});
 
 // ========================================================
-// ১. DUB / ANIME / MEGAPLAY রেজলভার
+// ১. DUB এর জন্য MAL / ANILIST / MEGAPLAY রেজলভার
 // ========================================================
 async function getAnimeExternalIds(title = '') {
   try {
@@ -285,7 +298,7 @@ async function getAnimeExternalIds(title = '') {
 }
 
 async function resolveDubStream(params) {
-  const { id, episode = 1, title, malId: paramMal, anilistId: paramAni, season = 1 } = params;
+  const { id, episode = 1, title, malId: paramMal, anilistId: paramAni } = params;
   let malId = paramMal;
   let anilistId = paramAni;
 
@@ -295,6 +308,7 @@ async function resolveDubStream(params) {
     anilistId = ext.anilistId;
   }
 
+  // MAL / AniList Endpoint (DUB Only)
   if (malId) return `https://megaplay.buzz/stream/mal/${malId}/${episode}/dub`;
   if (anilistId) return `https://megaplay.buzz/stream/ani/${anilistId}/${episode}/dub`;
 
@@ -308,11 +322,11 @@ async function resolveDubStream(params) {
     }
   } catch (e) {}
 
-  return `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}?dub=1`;
+  return `https://vidsrc.sbs/embed/tv/${id}/${params.season}/${episode}?dub=1`;
 }
 
 // ========================================================
-// ২. প্রোভাইডার তালিকা
+// ২. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার (SUB, Movies, TV Series)
 // ========================================================
 function getWebProviderUrls(params) {
   const { id, isTv, season, episode } = params;
@@ -320,98 +334,142 @@ function getWebProviderUrls(params) {
   if (isTv) {
     return [
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://vidlink.pro/tv/${id}/${season}/${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
       `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-      `https://player.videasy.net/tv/${id}/${season}/${episode}`
+      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
     ];
   }
 
   return [
     `https://vidnest.fun/movie/${id}`,
-    `https://vidlink.pro/movie/${id}`,
-    `https://vidrock.net/embed/movie/${id}`,
     `https://player.autoembed.cc/embed/movie/${id}`,
     `https://vidsrc.sbs/embed/movie/${id}`,
-    `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
-    `https://player.videasy.net/movie/${id}`
+    `https://vidrock.net/embed/movie/${id}`,
+    `https://vidsrc.xyz/embed/movie?tmdb=${id}`
   ];
 }
 
-// ৩. হাইপার-অপ্টিমাইজড ফাস্ট স্নিফার
 async function fastScrape(browser, targetUrl) {
-  let page = null;
-  try {
-    page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 720 });
-    await page.setRequestInterception(true);
+  const page = await browser.newPage();
+  await page.setRequestInterception(true);
+  page.on('request', (req) => {
+    const type = req.resourceType();
+    const url = req.url();
+    if (['image', 'stylesheet', 'font', 'media'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
+      req.abort();
+    } else {
+      req.continue();
+    }
+  });
 
-    return await new Promise((resolve) => {
-      let resolved = false;
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-      const checkUrl = async (u) => {
-        const lower = u.toLowerCase();
-        const isMedia = (lower.includes('.m3u8') || lower.includes('/hls/') || (lower.includes('.mp4') && !lower.includes('google'))) &&
-                        !lower.includes('demo') && !lower.includes('trailer') && !lower.includes('preview');
+  return new Promise(async (resolve) => {
+    let resolved = false;
 
-        if (isMedia && !resolved) {
-          resolved = true;
-          if (page) await page.close().catch(() => {});
-          resolve(u);
+    page.on('response', async (response) => {
+      const u = response.url();
+      const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
+      const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
+
+      if (isMedia && !isFake && !resolved) {
+        resolved = true;
+        await page.close().catch(() => {});
+        resolve(u);
+      }
+    });
+
+    try {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
+      await page.evaluate(() => {
+        const btn = document.querySelector('video, button, #play, .play-btn');
+        if (btn) btn.click();
+      });
+    } catch (e) {}
+
+    setTimeout(async () => {
+      if (!resolved) {
+        resolved = true;
+        await page.close().catch(() => {});
+        resolve(null);
+      }
+    }, 4500);
+  });
+}
+
+// ========================================================
+// ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
+// ========================================================
+async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsPly') {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
+  return new Promise(async (resolve) => {
+    let resolved = false;
+
+    page.on('response', async (response) => {
+      const u = response.url();
+      const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
+      const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
+
+      if (isMedia && !isFake && !resolved) {
+        resolved = true;
+        await page.close().catch(() => {});
+        resolve(u);
+      }
+    });
+
+    try {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+
+      const triggerPlayback = async () => {
+        const frames = [page.mainFrame(), ...page.frames()];
+        for (const frame of frames) {
+          try {
+            await frame.evaluate((srvName) => {
+              const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
+              if (btn) btn.click();
+
+              const allElements = Array.from(document.querySelectorAll('*'));
+              const dropdown = allElements.find(el => {
+                const t = (el.innerText || el.textContent || '').trim();
+                return t.includes('Pro Multi') || t.includes('Server') || el.classList.contains('server-item');
+              });
+              if (dropdown) dropdown.click();
+
+              const serverOption = allElements.find(el => {
+                const t = (el.innerText || el.textContent || '').trim();
+                return (
+                  t.toLowerCase().includes(srvName.toLowerCase()) ||
+                  t.includes('Multi-Lang') ||
+                  t.includes('AwsPly') ||
+                  t.includes('Nitro') ||
+                  t.includes('VidHindi') ||
+                  t.includes('VidEmd')
+                );
+              });
+              if (serverOption) serverOption.click();
+            }, preferredServer);
+          } catch (e) {}
         }
       };
 
-      page.on('request', (req) => {
-        const url = req.url();
-        checkUrl(url);
+      await triggerPlayback();
+      await new Promise(r => setTimeout(r, 1200));
+      await triggerPlayback();
 
-        const type = req.resourceType();
-        if (['image', 'font', 'stylesheet'].includes(type) || url.includes('analytics') || url.includes('doubleclick')) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
+    } catch (e) {}
 
-      page.on('response', (response) => {
-        checkUrl(response.url());
-      });
-
-      page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36')
-        .then(() => page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 8000 }))
-        .then(async () => {
-          for (let step = 0; step < 2; step++) {
-            if (resolved) break;
-            const frames = [page.mainFrame(), ...page.frames()];
-            for (const frame of frames) {
-              try {
-                await frame.evaluate(() => {
-                  const elements = Array.from(document.querySelectorAll('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button, [class*="play"], body'));
-                  elements.forEach((el) => {
-                    try { el.click(); } catch (e) {}
-                  });
-                });
-              } catch (e) {}
-            }
-            await new Promise((r) => setTimeout(r, 800));
-          }
-        })
-        .catch(() => {});
-
-      setTimeout(async () => {
-        if (!resolved) {
-          resolved = true;
-          if (page) await page.close().catch(() => {});
-          resolve(null);
-        }
-      }, 5500);
-    });
-  } catch (err) {
-    if (page) await page.close().catch(() => {});
-    return null;
-  }
+    setTimeout(async () => {
+      if (!resolved) {
+        resolved = true;
+        await page.close().catch(() => {});
+        resolve(null);
+      }
+    }, 7000);
+  });
 }
 
 function parseParams(query) {
@@ -499,6 +557,7 @@ app.get('/api/resolve-stream', async (req, res) => {
   })();
 
   pendingScrapes.set(cacheKey, scrapeTask);
+
   const finalResult = await scrapeTask;
 
   if (finalResult) {
@@ -512,8 +571,8 @@ app.get('/api/resolve-stream', async (req, res) => {
   }
 
   const fallbackEmbed = params.isTv 
-    ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://vidsrc.sbs/embed/movie/${params.id}`;
+    ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
+    : `https://player.autoembed.cc/embed/movie/${params.id}`;
 
   return res.json({
     success: true,
@@ -525,7 +584,60 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ========================================================
-// ৫. সেফ মিডিয়া টানেল প্রক্সি (সেগমেন্ট ও রিরাইটার)
+// ৫. VIDSRC.SBS ডাইরেক্ট স্ক্র্যাপ এন্ডপয়েন্ট
+// ========================================================
+app.get('/api/vidsrc/scrape', async (req, res) => {
+  const params = parseParams(req.query);
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
+  const cacheKey = `vidsrc_${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.server}`;
+
+  const cached = streamCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < CACHE_TTL) {
+    return res.json({
+      success: true,
+      isEmbed: false,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`,
+      rawUrl: cached.url,
+      server: params.server,
+      type: params.typeStr
+    });
+  }
+
+  try {
+    const browser = await getWarmBrowser();
+    const targetUrl = params.isTv
+      ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
+      : `https://vidsrc.sbs/embed/movie/${params.id}`;
+
+    const streamUrl = await scrapeVidSrcMultiLang(browser, targetUrl, params.server);
+
+    if (streamUrl) {
+      streamCache.set(cacheKey, { url: streamUrl, ref: targetUrl, time: Date.now() });
+      return res.json({
+        success: true,
+        isEmbed: false,
+        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`,
+        rawUrl: streamUrl,
+        server: params.server,
+        type: params.typeStr
+      });
+    }
+
+    return res.json({
+      success: true,
+      isEmbed: true,
+      streamUrl: targetUrl,
+      embedUrl: targetUrl,
+      server: params.server,
+      type: params.typeStr
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ========================================================
+// ৬. সেফ মিডিয়া টানেল প্রক্সি (কাস্টম Access Denied HTML সহ)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -546,64 +658,37 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     const host = req.get('host');
     const proxyBase = `${protocol}://${host}/api/stream-proxy`;
 
-    const requestHeaders = {
-      'Referer': ref,
-      'Origin': ref.replace(/\/$/, ''),
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    };
-
-    if (req.headers['range']) {
-      requestHeaders['Range'] = req.headers['range'];
-    }
-
     const response = await axios({
       method: 'GET',
       url: cleanUrl,
       responseType: cleanUrl.includes('.m3u8') ? 'text' : 'stream',
-      headers: requestHeaders,
-      timeout: 25000
+      headers: {
+        'Referer': ref,
+        'Origin': ref.replace(/\/$/, ''),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      timeout: 20000
     });
 
-    if (cleanUrl.includes('.m3u8') || (typeof response.data === 'string' && response.data.includes('#EXTM3U'))) {
+    if (cleanUrl.includes('.m3u8')) {
       const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
 
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
-        if (!trimmed) return line;
-
-        if (trimmed.startsWith('#')) {
-          if (trimmed.includes('URI="')) {
-            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
-              try {
-                let absUrl = p1;
-                if (!absUrl.startsWith('http://') && !absUrl.startsWith('https://')) {
-                  absUrl = new URL(p1, baseUrl).href;
-                }
-                return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(ref)}"`;
-              } catch {
-                return match;
-              }
-            });
-          }
-          return line;
-        }
-
-        try {
+        if (trimmed && !trimmed.startsWith('#')) {
           let segmentUrl = trimmed;
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
             segmentUrl = new URL(trimmed, baseUrl).href;
           }
           return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
-        } catch {
-          return line;
         }
+        return line;
       }).join('\n');
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache, no-store'
+        'Access-Control-Allow-Origin': '*'
       });
       return res.send(rewritten);
     }
@@ -613,11 +698,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes'
     });
-
-    if (response.headers['content-range']) {
-      res.set('Content-Range', response.headers['content-range']);
-      res.status(206);
-    }
 
     response.data.pipe(res);
   } catch (error) {
@@ -629,11 +709,13 @@ app.get('/api/stream-proxy', async (req, res) => {
   const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
   const acceptHeader = req.headers['accept'] || '';
 
+  // ব্রাউজার হটলিংক প্রটেকশন (অননুমোদিত ডোমেইন চেক)
   const isAuthorized = 
     ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
     refererHeader.includes('xubilas') ||
     refererHeader.includes('hmair');
 
+  // যদি সরাসরি ব্রাউজারে লিংক ওপেন করে বা অন্য সাইট থেকে চেষ্টা করে, তাহলে কাস্টম HTML পেজ দেখাবে
   if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(403).send(ACCESS_DENIED_HTML);
@@ -644,37 +726,19 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-// ৬. MovieBox Native Play Endpoint
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
   if (params.lang === 'dub') {
     const dubEmbed = await resolveDubStream(params);
     return res.redirect(dubEmbed);
   }
-
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
   const cached = streamCache.get(cacheKey);
-
-  if (cached) {
-    return pipeMediaTunnel(req, res, cached.url, cached.ref);
-  }
-
-  try {
-    const browser = await getWarmBrowser();
-    const urls = getWebProviderUrls(params);
-    for (const url of urls) {
-      const streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        streamCache.set(cacheKey, { url: streamUrl, ref: url, time: Date.now() });
-        return pipeMediaTunnel(req, res, streamUrl, url);
-      }
-    }
-  } catch (e) {}
-
+  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
   return res.status(404).send('Stream Offline');
 });
 
-app.get('/', (req, res) => res.send('🚀 Universal Stream Scraper Core Online!'));
+app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper & Anti-Hotlink Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
