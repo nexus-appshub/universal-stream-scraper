@@ -1,6 +1,6 @@
 FROM node:18-slim
 
-# Install Chromium & necessary graphical/sandbox dependencies for Puppeteer
+# Chromium এবং Puppeteer-এর জন্য প্রয়োজনীয় সমস্ত লিনাক্স লাইব্রেরি ইনস্টল
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-ipafont-gothic \
@@ -12,17 +12,16 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Puppeteer executable path
+# Puppeteer যাতে নিজস্ব ক্রোমিয়াম ডাউনলোড না করে সিস্টেমেরটা ব্যবহার করে
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-WORKDIR /app
+WORKDIR /usr/src/app
 
 COPY package*.json ./
-RUN npm install
+RUN npm install --omit=dev
 
 COPY . .
 
 EXPOSE 8080
-
-CMD ["node", "server.js"]
+CMD [ "node", "server.js" ]
