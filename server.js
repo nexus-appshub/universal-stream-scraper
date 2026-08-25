@@ -619,4 +619,151 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
       ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
       : `https://vidsrc.sbs/embed/movie/${params.id}`;
 
-    const strea
+    const streamUrl = await scrapeVidSrcMultiLang(browser, targetUrl, params.server);
+
+    if (streamUrl) {
+      streamCache.set(cacheKey, { url: streamUrl, ref: targetUrl, time: Date.now() });
+      return res.json({
+        success: true,
+        isEmbed: false,
+        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`,
+        rawUrl: streamUrl,
+        server: params.server,
+        type: params.typeStr
+      });
+    }
+
+    return res.json({
+      success: true,
+      isEmbed: true,
+      streamUrl: targetUrl,
+      embedUrl: targetUrl,
+      server: params.server,
+      type: params.typeStr
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ========================================================
+// ৭. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও লাইভ পাইপিং ফিক্স)
+// ========================================================
+async function pipeMediaTunnel(req, res, targetUrl, referer) {
+  try {
+    let cleanUrl = targetUrl;
+    while (cleanUrl.includes('%3A') || cleanUrl.includes('%2F')) {
+      try {
+        const decoded = decodeURIComponent(cleanUrl);
+        if (decoded === cleanUrl) break;
+        cleanUrl = decoded;
+      } catch (e) {
+        break;
+      }
+    }
+
+    const domain = new URL(cleanUrl).origin;
+    const ref = referer ? decodeURIComponent(referer) : domain;
+    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    const host = req.get('host');
+    const proxyBase = `${protocol}://${host}/api/stream-proxy`;
+
+    const response = await axios({
+      method: 'GET',
+      url: cleanUrl,
+      responseType: cleanUrl.includes('.m3u8') ? 'text' : 'stream',
+      headers: {
+        'Referer': ref,
+        'Origin': ref.replace(/\/$/, ''),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+      },
+      timeout: 20000
+    });
+
+    if (cleanUrl.includes('.m3u8')) {
+      const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
+      const lines = response.data.split('\n');
+
+      const rewritten = lines.map(line => {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith('#')) {
+          let segmentUrl = trimmed;
+          if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+            segmentUrl = new URL(trimmed, baseUrl).href;
+          }
+          return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
+        }
+        return line;
+      }).join('\n');
+
+      res.set({
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache'
+      });
+      return res.send(rewritten);
+    }
+
+    res.set({
+      'Content-Type': response.headers['content-type'] || 'video/mp4',
+      'Access-Control-Allow-Origin': '*',
+      'Accept-Ranges': 'bytes'
+    });
+
+    response.data.pipe(res);
+  } catch (error) {
+    res.status(502).send('Stream Tunnel Error');
+  }
+}
+
+app.get('/api/stream-proxy', async (req, res) => {
+  const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
+  const acceptHeader = req.headers['accept'] || '';
+
+  // শুধুমাত্র ব্রাউজারের অ্যাড্রেস বারে ডিরেক্ট লিংক পেস্ট করলে Access Denied পেজ আসবে
+  const isDirectBrowserDoc = acceptHeader.includes('text/html') && (!refererHeader || (!refererHeader.includes('hmair') && !refererHeader.includes('xubilas') && !refererHeader.includes('localhost')));
+
+  if (isDirectBrowserDoc) {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    return res.status(403).send(ACCESS_DENIED_HTML);
+  }
+
+  const { url, referer } = req.query;
+  if (!url) return res.status(400).send('URL missing');
+  return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
+});
+
+// ৮. MovieBox Native Play Endpoint (ইনস্ট্যান্ট অটো-স্ক্র্যাপ ফলব্যাক)
+app.get('/api/moviebox/play', async (req, res) => {
+  const params = parseParams(req.query);
+  if (params.lang === 'dub') {
+    const dubEmbed = await resolveDubStream(params);
+    return res.redirect(dubEmbed);
+  }
+
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  let cached = streamCache.get(cacheKey);
+
+  if (cached) {
+    return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  }
+
+  try {
+    const browser = await getWarmBrowser();
+    const urls = getWebProviderUrls(params);
+    for (const url of urls) {
+      const streamUrl = await fastScrape(browser, url);
+      if (streamUrl) {
+        streamCache.set(cacheKey, { url: streamUrl, ref: url, time: Date.now() });
+        return pipeMediaTunnel(req, res, streamUrl, url);
+      }
+    }
+  } catch (e) {}
+
+  return res.status(404).send('Stream Offline');
+});
+
+app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper & Anti-Hotlink Engine Online!'));
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
