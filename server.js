@@ -21,13 +21,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// ২৪ ঘণ্টা মেমোরি ক্যাশ এবং Concurrency Pool
 const streamCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const pendingScrapes = new Map();
 
 let globalBrowser = null;
-let activePagesCount = 0;
+let activePages = 0;
 const MAX_CONCURRENT_PAGES = 6;
 
 async function getWarmBrowser() {
@@ -47,7 +46,6 @@ async function getWarmBrowser() {
       '--disable-extensions',
       '--blink-settings=imagesEnabled=false',
       '--disable-remote-fonts',
-      '--disable-background-networking',
       '--mute-audio'
     ]
   });
@@ -56,7 +54,6 @@ async function getWarmBrowser() {
 
 getWarmBrowser().catch(() => {});
 
-// প্রোভাইডার লিস্ট
 function getWebProviderUrls(params) {
   const { id, isTv, season, episode } = params;
   if (isTv) {
@@ -75,22 +72,19 @@ function getWebProviderUrls(params) {
   ];
 }
 
-// প্যারালাল ফাস্ট স্ক্র্যাপার ফাংশন
 async function scrapeSingleUrl(browser, targetUrl) {
-  if (activePagesCount >= MAX_CONCURRENT_PAGES) {
+  if (activePages >= MAX_CONCURRENT_PAGES) {
     await new Promise(r => setTimeout(r, 600));
   }
-
-  activePagesCount++;
+  activePages++;
   let page = null;
 
   return new Promise(async (resolve) => {
     let isDone = false;
-
     const cleanup = async (result = null) => {
       if (!isDone) {
         isDone = true;
-        activePagesCount = Math.max(0, activePagesCount - 1);
+        activePages = Math.max(0, activePages - 1);
         if (page) {
           try {
             page.removeAllListeners();
@@ -101,17 +95,15 @@ async function scrapeSingleUrl(browser, targetUrl) {
       }
     };
 
-    // ৫ সেকেন্ড হার্ড টাইমআউট
     const timer = setTimeout(() => cleanup(null), 5500);
 
     try {
       page = await browser.newPage();
       await page.setRequestInterception(true);
-
       page.on('request', (req) => {
         const type = req.resourceType();
         const url = req.url().toLowerCase();
-        if (['image', 'stylesheet', 'font', 'media'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('adservice')) {
+        if (['image', 'stylesheet', 'font', 'media'].includes(type) || url.includes('analytics') || url.includes('doubleclick')) {
           req.abort();
         } else {
           req.continue();
@@ -129,13 +121,10 @@ async function scrapeSingleUrl(browser, targetUrl) {
       });
 
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 4500 }).catch(() => {});
-
-      // ক্লিক ট্রিগার
       await page.evaluate(() => {
         const btns = document.querySelectorAll('button, video, .play-btn, #play, [class*="play"]');
         if (btns.length > 0) btns[0].click();
       }).catch(() => {});
-
     } catch (err) {
       clearTimeout(timer);
       cleanup(null);
@@ -143,7 +132,6 @@ async function scrapeSingleUrl(browser, targetUrl) {
   });
 }
 
-// প্যারালাল রেস রেজলভার
 async function parallelScrape(browser, urls) {
   try {
     const promises = urls.map(url => scrapeSingleUrl(browser, url).then(res => res ? { url: res, ref: url } : null));
@@ -154,7 +142,6 @@ async function parallelScrape(browser, urls) {
   }
 }
 
-// প্যারামিটার পার্সিং
 function parseParams(query) {
   const targetId = query.id || query.tmdbId || '27205';
   const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
@@ -167,7 +154,6 @@ function parseParams(query) {
   return { id: targetId, typeStr, isTv, season, episode, lang, server };
 }
 
-// ১. মেইন রেজলভার এন্ডপয়েন্ট
 app.get('/api/resolve-stream', async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
@@ -238,7 +224,6 @@ app.get('/api/resolve-stream', async (req, res) => {
   });
 });
 
-// ২. অপ্টিমাইজড মিডিয়া টানেল প্রক্সি
 app.get('/api/stream-proxy', async (req, res) => {
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
@@ -298,3 +283,10 @@ app.get('/', (req, res) => res.send('🚀 Universal Turbo Stream Scraper is Live
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
+
+
+
+
+
+
+
