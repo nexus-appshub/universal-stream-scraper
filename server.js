@@ -12,7 +12,222 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
+// ========================================================
+// কাস্টম ACCESS DENIED HTML টেমপ্লেট
+// ========================================================
+const ACCESS_DENIED_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Access Denied - HOME AIR TV</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Poppins', sans-serif;
+    }
+    body {
+      background: radial-gradient(circle at top right, #fff5f0, #ffffff 60%, #fff0e6);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #333333;
+      padding: 20px;
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(255, 107, 0, 0.15);
+      box-shadow: 0 20px 50px rgba(255, 107, 0, 0.12);
+      border-radius: 28px;
+      padding: 45px 35px;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      background: linear-gradient(90deg, #ff8800, #ff4500);
+    }
+    .header-logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      margin-bottom: 25px;
+      transition: transform 0.2s ease;
+    }
+    .header-logo:hover {
+      transform: scale(1.04);
+    }
+    .logo-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #ff8800, #ff4500);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 15px rgba(255, 107, 0, 0.35);
+    }
+    .logo-icon svg {
+      width: 22px;
+      height: 22px;
+      fill: #ffffff;
+      margin-left: 3px;
+    }
+    .logo-text {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      background: linear-gradient(90deg, #ff5500, #ff8800);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .badge {
+      background: #ff5500;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      vertical-align: middle;
+      -webkit-text-fill-color: white;
+    }
+    .icon-box {
+      width: 75px;
+      height: 75px;
+      background: #fff4ed;
+      border: 2px dashed #ff8800;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+    .icon-box svg {
+      width: 36px;
+      height: 36px;
+      stroke: #ff5500;
+    }
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 10px;
+    }
+    p {
+      color: #666666;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 25px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: linear-gradient(135deg, #ff8800 0%, #ff5500 100%);
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 15px;
+      padding: 14px 32px;
+      border-radius: 14px;
+      box-shadow: 0 8px 25px rgba(255, 85, 0, 0.35);
+      transition: all 0.25s ease;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+    .btn:hover {
+      box-shadow: 0 12px 30px rgba(255, 85, 0, 0.45);
+      transform: translateY(-2px);
+      filter: brightness(1.05);
+    }
+    .btn-tg {
+      display: inline-block;
+      background: #229ED9;
+      color: white;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      transition: background 0.2s;
+      width: 100%;
+    }
+    .btn-tg:hover {
+      background: #1c88bd;
+    }
+    .footer-note {
+      margin-top: 25px;
+      font-size: 12px;
+      color: #999999;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <a href="https://hmair.xyz" class="header-logo" title="Go to Home Air TV">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+      </div>
+      <div class="logo-text">HOME AIR <span class="badge">TV</span></div>
+    </a>
+    <div class="icon-box">
+      <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+      </svg>
+    </div>
+    <h2>🚫Access Denied🤚</h2>
+    <p>
+      🤦‍♂️ভাই লিংক কপি করে লাভ নেই!<br>
+      যদি লিংকের এতই প্রয়োজন হয় তবে ডেভেলপারকে সরাসরি কন্টাক্ট করেন, তাও এভাবে নেটওয়ার্ক ট্যাব ঘেঁটে লিংক খোঁজা বাদ দেন 😒 Please stream seamlessly through the official platform.
+    </p>
+    <a href="https://hmair.xyz" class="btn">
+      <span>Watch on Official Website</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+    </a>
+    <a href="https://t.me/homeairtv" class="btn-tg" target="_blank" rel="noopener noreferrer">JOIN TG 😜</a>
+    <div class="footer-note">Protected by Stream Proxy Shield • 2026</div>
+  </div>
+</body>
+</html>`;
+
+// ========================================================
+// সিকিউরিটি: অনুমোদিত ডোমেইন তালিকা (Anti-Hotlink Guard)
+// ========================================================
+const ALLOWED_ORIGINS = [
+  'https://homeairtv.xubilaswebdevcorp.shop',
+  'https://anime.hmair.xyz',
+  'https://hmair.xyz',
+  'http://localhost:3000',
+  'http://localhost:5173'
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
+      return callback(null, true);
+    }
+    return callback(new Error('Access Denied: Hotlinking Prohibited'));
+  },
+  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+  allowedHeaders: '*'
+}));
+
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -26,7 +241,7 @@ app.use((req, res, next) => {
 const streamCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 
-// সমসাময়িক রিকোয়েস্ট লকার (একই টাইটেলে মাল্টিপল ব্রাউজার ওপেন বন্ধ রাখার জন্য)
+// কনকারেন্সি লকার
 const pendingScrapes = new Map();
 
 let globalBrowser = null;
@@ -295,7 +510,6 @@ app.get('/api/resolve-stream', async (req, res) => {
 
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
-  // ১. মেমোরি ক্যাশ হিট চেক (মিলিসেকেন্ড রেসপন্স)
   if (streamCache.has(cacheKey)) {
     const cached = streamCache.get(cacheKey);
     return res.json({
@@ -307,7 +521,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // ২. কনকারেন্সি লকার (একই টাইটেলের জন্য মাত্র ১টি ব্রাউজার সেশন ওপেন হবে)
   if (pendingScrapes.has(cacheKey)) {
     try {
       const result = await pendingScrapes.get(cacheKey);
@@ -323,7 +536,6 @@ app.get('/api/resolve-stream', async (req, res) => {
     } catch (e) {}
   }
 
-  // ৩. নতুন স্ক্র্যাপ টাস্ক
   const scrapeTask = (async () => {
     try {
       const browser = await getWarmBrowser();
@@ -424,41 +636,42 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
   }
 });
 
-// টানেল হ্যান্ডলার
-app.get('/api/moviebox/play', async (req, res) => {
-  const params = parseParams(req.query);
-  if (params.lang === 'dub') {
-    const dubEmbed = await resolveDubStream(params);
-    return res.redirect(dubEmbed);
-  }
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-  const cached = streamCache.get(cacheKey);
-  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
-  return res.status(404).send('Stream Offline');
-});
-
+// ========================================================
+// ৬. সেফ মিডিয়া টানেল প্রক্সি (কাস্টম Access Denied HTML সহ)
+// ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
-    const domain = new URL(targetUrl).origin;
-    const ref = referer || domain;
+    let cleanUrl = targetUrl;
+    while (cleanUrl.includes('%3A') || cleanUrl.includes('%2F')) {
+      try {
+        const decoded = decodeURIComponent(cleanUrl);
+        if (decoded === cleanUrl) break;
+        cleanUrl = decoded;
+      } catch (e) {
+        break;
+      }
+    }
+
+    const domain = new URL(cleanUrl).origin;
+    const ref = referer ? decodeURIComponent(referer) : domain;
     const protocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.get('host');
     const proxyBase = `${protocol}://${host}/api/stream-proxy`;
 
     const response = await axios({
       method: 'GET',
-      url: targetUrl,
-      responseType: targetUrl.includes('.m3u8') ? 'text' : 'stream',
+      url: cleanUrl,
+      responseType: cleanUrl.includes('.m3u8') ? 'text' : 'stream',
       headers: {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      timeout: 15000
+      timeout: 20000
     });
 
-    if (targetUrl.includes('.m3u8')) {
-      const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
+    if (cleanUrl.includes('.m3u8')) {
+      const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
 
       const rewritten = lines.map(line => {
@@ -488,17 +701,44 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
     response.data.pipe(res);
   } catch (error) {
-    res.status(500).send('Stream Tunnel Error');
+    res.status(502).send('Stream Tunnel Error');
   }
 }
 
 app.get('/api/stream-proxy', async (req, res) => {
+  const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
+  const acceptHeader = req.headers['accept'] || '';
+
+  // ব্রাউজার হটলিংক প্রটেকশন (অননুমোদিত ডোমেইন চেক)
+  const isAuthorized = 
+    ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
+    refererHeader.includes('xubilas') ||
+    refererHeader.includes('hmair');
+
+  // যদি সরাসরি ব্রাউজারে লিংক ওপেন করে বা অন্য সাইট থেকে চেষ্টা করে, তাহলে কাস্টম HTML পেজ দেখাবে
+  if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    return res.status(403).send(ACCESS_DENIED_HTML);
+  }
+
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online!'));
+app.get('/api/moviebox/play', async (req, res) => {
+  const params = parseParams(req.query);
+  if (params.lang === 'dub') {
+    const dubEmbed = await resolveDubStream(params);
+    return res.redirect(dubEmbed);
+  }
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  const cached = streamCache.get(cacheKey);
+  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
+  return res.status(404).send('Stream Offline');
+});
+
+app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper & Anti-Hotlink Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
