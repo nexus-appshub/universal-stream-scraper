@@ -72,73 +72,58 @@ app.get('/', (req, res) => {
   res.send('Multi-Provider Stream Scraper API is running smoothly.');
 });
 
-// মাল্টি-প্রোভাইডার স্ক্র্যাপার ফাংশন
-async function scrapeStreamUrl(targetUrl, refererUrl) {
-  let browser = null;
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,720'
-      ]
-    });
+// মাল্টি-প্রোভাইডার ফলব্যাক স্ক্র্যাপার ফাংশন
+async function scrapeFromProvider(browser, targetUrl, refererUrl) {
+  const page = await browser.newPage();
+  
+  await page.setExtraHTTPHeaders({
+    'accept-language': 'en-US,en;q=0.9',
+    'referer': refererUrl
+  });
+  
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+  );
 
-    const page = await browser.newPage();
-    await page.setExtraHTTPHeaders({
-      'accept-language': 'en-US,en;q=0.9',
-      'referer': refererUrl
-    });
-    
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+  let streamUrl = null;
 
-    let streamUrl = null;
-
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (
-        url.includes('.m3u8') ||  
-        url.includes('master.m3u8') ||  
-        url.includes('/hls/') ||  
-        url.includes('playlist.m3u8')
-      ) {
-        streamUrl = url;
-      }
-    });
-
-    try {
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 12000 });
-    } catch (e) {}
-
-    try {
-      const frames = page.frames();
-      for (const frame of frames) {
-        try {
-          await frame.click('video, #play, .play-btn, .jw-display-icon-container, div[class*="play"]', { timeout: 1000 });
-        } catch (fErr) {}
-      }
-      await page.mouse.click(640, 360);
-    } catch (e) {}
-
-    let waitTime = 0;
-    while (!streamUrl && waitTime < 7000) {
-      await new Promise(r => setTimeout(r, 500));
-      waitTime += 500;
+  page.on('response', async (response) => {
+    const url = response.url();
+    if (
+      url.includes('.m3u8') ||  
+      url.includes('master.m3u8') ||  
+      url.includes('/hls/') ||  
+      url.includes('playlist.m3u8')
+    ) {
+      streamUrl = url;
     }
+  });
 
-    await browser.close();
-    return streamUrl;
-  } catch (error) {
-    if (browser) await browser.close();
-    return null;
+  try {
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 10000 });
+  } catch (e) {}
+
+  try {
+    const frames = page.frames();
+    for (const frame of frames) {
+      try {
+        await frame.click('video, #play, .play-btn, .jw-display-icon-container, div[class*="play"]', { timeout: 1000 });
+      } catch (fErr) {}
+    }
+    await page.mouse.click(640, 360);
+  } catch (e) {}
+
+  let waitTime = 0;
+  while (!streamUrl && waitTime < 6000) {
+    await new Promise(r => setTimeout(r, 500));
+    waitTime += 500;
   }
+
+  await page.close().catch(() => {});
+  return streamUrl;
 }
 
-// ১. Resolver API with Fallback Providers
+// ১. Multi-Provider Fallback Resolver API
 app.get('/api/resolve-stream', async (req, res) => {
   const { id, s = 1, e = 1, type = 'movie' } = req.query;
 
@@ -159,45 +144,72 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // প্রোভাইডার চেইন (Vidnest -> Autoembed -> VidLink)
+  // প্রোভাইডার চেইন লিস্ট (Vidnest -> VidRock -> AutoEmbed -> VidLink)
   const providers = type === 'tv' ? [
     { url: `https://vidnest.fun/tv/${id}/${s}/${e}`, ref: 'https://vidnest.fun/' },
+    { url: `https://vidrock.net/embed/tv/${id}/${s}/${e}`, ref: 'https://vidrock.net/' },
     { url: `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}`, ref: 'https://autoembed.cc/' },
     { url: `https://vidlink.pro/tv/${id}/${s}/${e}`, ref: 'https://vidlink.pro/' }
   ] : [
     { url: `https://vidnest.fun/movie/${id}`, ref: 'https://vidnest.fun/' },
+    { url: `https://vidrock.net/embed/movie/${id}`, ref: 'https://vidrock.net/' },
     { url: `https://player.autoembed.cc/embed/movie/${id}`, ref: 'https://autoembed.cc/' },
     { url: `https://vidlink.pro/movie/${id}`, ref: 'https://vidlink.pro/' }
   ];
 
-  let foundUrl = null;
-  let activeRef = '';
+  let browser = null;
 
-  for (const provider of providers) {
-    foundUrl = await scrapeStreamUrl(provider.url, provider.ref);
-    if (foundUrl) {
-      activeRef = provider.ref;
-      break;
-    }
-  }
-
-  if (foundUrl) {
-    streamCache.set(cacheKey, { url: foundUrl, ref: activeRef, time: Date.now() });
-    const hostUrl = `${req.protocol}://${req.get('host')}`;
-    return res.json({
-      success: true,
-      isEmbed: false,
-      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(foundUrl)}&referer=${encodeURIComponent(activeRef)}`,
-      rawUrl: foundUrl,
-      type
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1280,720'
+      ]
     });
-  } else {
-    return res.status(404).json({ success: false, error: 'Direct stream link not captured from any provider.' });
+
+    let streamUrl = null;
+    let activeRef = '';
+
+    // একটার পর একটা প্রোভাইডার ট্রাই করতে থাকবে যতক্ষণ না লিংক পাওয়া যায়
+    for (const provider of providers) {
+      try {
+        streamUrl = await scrapeFromProvider(browser, provider.url, provider.ref);
+        if (streamUrl) {
+          activeRef = provider.ref;
+          break;
+        }
+      } catch (err) {}
+    }
+
+    await browser.close();
+
+    if (streamUrl) {
+      streamCache.set(cacheKey, { url: streamUrl, ref: activeRef, time: Date.now() });
+      const hostUrl = `${req.protocol}://${req.get('host')}`;
+      return res.json({
+        success: true,
+        isEmbed: false,
+        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(activeRef)}`,
+        rawUrl: streamUrl,
+        type
+      });
+    } else {
+      return res.status(404).json({ success: false, error: 'All fallback providers failed to capture stream.' });
+    }
+
+  } catch (error) {
+    if (browser) await browser.close();
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ========================================================
-// সেফ মিডিয়া টানেল প্রক্সি (M3U8 Segments Rewriter)
+// মাল্টি-স্ট্রিম মিডিয়া টানেল প্রক্সি
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
