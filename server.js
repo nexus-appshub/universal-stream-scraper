@@ -1,8 +1,9 @@
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 const axios = require('axios');
+const zlib = require('zlib');
 let puppeteer = null;
+
 try {
   puppeteer = require('puppeteer');
 } catch (e) {
@@ -134,10 +135,48 @@ async function extractStream(targetUrl) {
   }
 }
 
-// স্মার্ট HLS/DASH ও বাফার প্রক্সি টানেল (Content-Type ও Data Inspector ফিক্স)
+// স্মার্ট HLS/DASH প্রক্সি টানেল (Content-Disposition & HTML Tab Player Support)
 app.get(['/api/proxy-stream', '/api/stream-proxy'], async (req, res) => {
   const streamUrl = req.query.url;
+  const isRaw = req.query.raw === 'true';
+  const acceptHeader = req.headers['accept'] || '';
+
   if (!streamUrl) return res.status(400).send('URL required');
+
+  // যদি সরাসরি ক্রোম ট্যাবে লিঙ্ক খোলা হয় তবে ইনলাইন প্লেয়ার দেখানো হবে
+  if (acceptHeader.includes('text/html') && !isRaw) {
+    const rawUrl = `${req.protocol}://${req.get('host')}${req.path}?url=${encodeURIComponent(streamUrl)}${req.query.referer ? `&referer=${encodeURIComponent(req.query.referer)}` : ''}&raw=true`;
+    return res.set('Content-Type', 'text/html; charset=utf-8').send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Stream Preview Player</title>
+        <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+        <style>
+          body { margin: 0; background: #000; display: flex; align-items: center; justify-content: center; height: 100vh; }
+          video { width: 100%; height: 100%; max-width: 1280px; max-height: 720px; outline: none; }
+        </style>
+      </head>
+      <body>
+        <video id="video" controls autoplay crossorigin="anonymous"></video>
+        <script>
+          const video = document.getElementById('video');
+          const src = ${JSON.stringify(rawUrl)};
+          if (Hls.isSupported()) {
+            const hls = new Hls({ lowLatencyMode: false });
+            hls.loadSource(src);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, function() { video.play(); });
+          } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = src;
+            video.addEventListener('loadedmetadata', function() { video.play(); });
+          }
+        </script>
+      </body>
+      </html>
+    `);
+  }
 
   try {
     let cleanUrl = decodeURIComponent(streamUrl);
@@ -148,7 +187,7 @@ app.get(['/api/proxy-stream', '/api/stream-proxy'], async (req, res) => {
     const response = await axios({
       method: 'GET',
       url: cleanUrl,
-      responseType: 'arraybuffer', // সম্পূর্ণ ডাটা সরাসরি বাফার হিসেবে আনা হচ্ছে
+      responseType: 'arraybuffer',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': customReferer,
@@ -158,10 +197,13 @@ app.get(['/api/proxy-stream', '/api/stream-proxy'], async (req, res) => {
       timeout: 25000
     });
 
-    const buffer = Buffer.from(response.data);
-    const textPreview = buffer.slice(0, 500).toString('utf8');
+    let buffer = Buffer.from(response.data);
+    const encoding = response.headers['content-encoding'];
+    if (encoding === 'gzip') {
+      try { buffer = zlib.gunzipSync(buffer); } catch (e) {}
+    }
 
-    // রেসপন্সে #EXTM3U থাকলে নিশ্চিতভাবে এটি M3U8 প্লেলিস্ট
+    const textPreview = buffer.slice(0, 500).toString('utf8');
     const isM3u8Content = textPreview.includes('#EXTM3U') || textPreview.includes('#EXT-X-');
 
     if (isM3u8Content) {
@@ -173,35 +215,33 @@ app.get(['/api/proxy-stream', '/api/stream-proxy'], async (req, res) => {
         const trimmed = line.trim();
         if (!trimmed) return line;
 
-        // কী এবং সাব-ইউআরআই রিরাইট
         if (trimmed.startsWith('#')) {
           if (trimmed.includes('URI="')) {
             return line.replace(/URI="([^"]+)"/g, (match, keyUrl) => {
               let abs = keyUrl.startsWith('http') ? keyUrl : new URL(keyUrl, baseUrl).href;
-              return `URI="${hostUrl}/api/proxy-stream?url=${encodeURIComponent(abs)}&referer=${encodeURIComponent(customReferer)}"`;
+              return `URI="${hostUrl}/api/proxy-stream?url=${encodeURIComponent(abs)}&referer=${encodeURIComponent(customReferer)}&raw=true"`;
             });
           }
           return line;
         }
 
-        // সেগমেন্ট লিঙ্ক রিরাইট
         let chunk = trimmed;
         if (!chunk.startsWith('http://') && !chunk.startsWith('https://')) {
           chunk = chunk.startsWith('/') ? `${new URL(cleanUrl).origin}${chunk}` : `${baseUrl}${chunk}`;
         }
-        return `${hostUrl}/api/proxy-stream?url=${encodeURIComponent(chunk)}&referer=${encodeURIComponent(customReferer)}`;
+        return `${hostUrl}/api/proxy-stream?url=${encodeURIComponent(chunk)}&referer=${encodeURIComponent(customReferer)}&raw=true`;
       }).join('\n');
 
       res.set({
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': '*',
+        'Content-Disposition': 'inline',
         'Cache-Control': 'no-cache, no-store',
-        'Content-Type': 'application/vnd.apple.mpegurl'
+        'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8'
       });
       return res.send(rewritten);
     }
 
-    // সাধারণ ভিডিও সেগমেন্ট (.ts / .mp4 / .m4s)
     let contentType = response.headers['content-type'] || 'video/mp2t';
     if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
       contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
@@ -210,7 +250,9 @@ app.get(['/api/proxy-stream', '/api/stream-proxy'], async (req, res) => {
     res.set({
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': '*',
+      'Content-Disposition': 'inline',
       'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=31536000, immutable',
       'Content-Type': contentType
     });
 
