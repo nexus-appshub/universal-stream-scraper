@@ -1,8 +1,13 @@
 FROM node:18-slim
 
-# Install necessary packages for Puppeteer & Chromium
+# Install Chromium dependencies and fonts
 RUN apt-get update && apt-get install -y \
     chromium \
+    fonts-ipafont-gothic \
+    fonts-wqy-zenhei \
+    fonts-thai-tlwg \
+    fonts-kacst \
+    fonts-freefont-ttf \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -26,23 +31,25 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    fonts-liberation \
     libappindicator3-1 \
     libasound2 \
     libgbm-dev \
     xdg-utils \
     wget \
+    ca-certificates \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
+# Set Puppeteer executable environment
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV NODE_ENV=production
 
-WORKDIR /app
+WORKDIR /usr/src/app
 
 COPY package*.json ./
 
-RUN npm install
+RUN npm ci --only=production
 
 COPY . .
 
