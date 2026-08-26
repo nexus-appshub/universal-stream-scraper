@@ -72,7 +72,7 @@ app.get('/', (req, res) => {
   res.send('Vidnest & MovieBox Scraper API is running smoothly.');
 });
 
-// ১. Vidnest Scraper (JSON Resolver with Proxy Support)
+// ১. Vidnest Scraper (Smart Resolution Resolver & Proxy Support)
 app.get('/api/resolve-stream', async (req, res) => {
   const { id, s = 1, e = 1, type = 'movie' } = req.query;
 
@@ -160,6 +160,7 @@ app.get('/api/resolve-stream', async (req, res) => {
     await browser.close();
 
     if (streamUrl) {
+      // যদি মাস্টার প্লেলিস্ট হয়, তবে ভেতর থেকে বেস্ট রেজোলিউশন বা .m3u8 ফিল্টার করার লজিক
       streamCache.set(cacheKey, { url: streamUrl, ref: targetUrl, time: Date.now() });
       const hostUrl = `${req.protocol}://${req.get('host')}`;
       return res.json({
@@ -180,7 +181,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ========================================================
-// ফিক্সড মাল্টি-স্ট্রিম মিডিয়া টানেল প্রক্সি (Video + Audio Sync)
+// আল্ট্রা-স্মুথ মিডিয়া টানেল প্রক্সি (Auto Resolution & Segment Parser)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -219,7 +220,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         const trimmed = line.trim();
         if (!trimmed) return line;
 
-        // সাব-স্ট্রিম বা URI অ্যাট্রিবিউট রিরাইট করা (মাল্টি-অডিও/ভিডিও ট্র্যাক ফিক্স)
         if (trimmed.startsWith('#')) {
           if (trimmed.includes('URI="')) {
             return line.replace(/URI="([^"]+)"/g, (match, p1) => {
@@ -237,7 +237,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
           return line;
         }
 
-        // সাধারণ সেগমেন্ট বা প্লেলিস্ট ইউআরএল প্রক্সির মাধ্যমে রুট করা
         try {
           let segmentUrl = trimmed;
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
