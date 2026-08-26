@@ -12,15 +12,8 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
-// ============================================================================
-// ১. ফুল-ওপেন CORS ও প্রি-ফ্লাইট হ্যান্ডলার (ওয়েব ব্রাউজার ফিক্স)
-// ============================================================================
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
-  allowedHeaders: '*'
-}));
-
+// ফুল ওপেন CORS যাতে ব্রাউজার কোনো সেগমেন্ট ব্লক না করে
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -30,9 +23,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ============================================================================
-// ২. ব্রাউজার পুল ও ক্যাশ
-// ============================================================================
+// ব্রাউজার পুল
 class FastBrowserPool {
   constructor() {
     this.browser = null;
@@ -44,7 +35,7 @@ class FastBrowserPool {
     if (this.launching) return this.launching;
 
     this.launching = (async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-fast-'));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-cluster-'));
       this.browser = await puppeteer.launch({
         headless: 'new',
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
@@ -77,9 +68,7 @@ pool.getBrowser().catch(() => {});
 const streamCache = new Map();
 const pendingResolvers = new Map();
 
-// ============================================================================
-// ৩. প্রোভাইডার রেজিস্ট্রি
-// ============================================================================
+// মাল্টি-প্রোভাইডার রেজিস্ট্রি
 const PROVIDERS = [
   {
     name: 'Vidnest',
@@ -103,9 +92,6 @@ const PROVIDERS = [
   }
 ];
 
-// ============================================================================
-// ৪. ফাস্ট ব্রাউজার স্ক্র্যাপার
-// ============================================================================
 async function fastBrowserScrape(browser, targetUrl, referer) {
   let page = null;
   try {
@@ -148,7 +134,7 @@ async function fastBrowserScrape(browser, targetUrl, referer) {
 
       page.on('response', (res) => checkUrl(res.url()));
 
-      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 5000 })
+      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 6000 })
         .then(async () => {
           if (resolved) return;
           const frames = [page.mainFrame(), ...page.frames()];
@@ -167,9 +153,9 @@ async function fastBrowserScrape(browser, targetUrl, referer) {
         if (!resolved) {
           resolved = true;
           page.close().catch(() => {});
-          reject(new Error('Timeout on provider: ' + targetUrl));
+          reject(new Error('Timeout on ' + targetUrl));
         }
-      }, 4500);
+      }, 5000);
     });
   } catch (err) {
     if (page) await page.close().catch(() => {});
@@ -187,9 +173,7 @@ async function resolveFastestStream(params) {
   }
 }
 
-// ============================================================================
-// ৫. ডিপ HLS ও AES-128 কী রিরাইটার (ওয়েব প্লেয়ার ফিক্স)
-// ============================================================================
+// মিডিয়া টানেল প্রক্সি (M3U8 / AES Key / Media Track Rewriter)
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
     let cleanUrl = targetUrl;
@@ -229,7 +213,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         const trimmed = line.trim();
         if (!trimmed) return line;
 
-        // AES-128 Encryption Key এবং Sub-Audio Track রিরাইট
+        // AES-128 এনক্রিপশন কী ও ট্র্যাক রিরাইট
         if (trimmed.startsWith('#')) {
           if (trimmed.includes('URI="')) {
             return line.replace(/URI="([^"]+)"/g, (match, keyUrl) => {
@@ -240,7 +224,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
           return line;
         }
 
-        // সব মিডিয়া ও প্লেলিস্ট সেগমেন্ট রিরাইট
+        // সেগমেন্ট রিরাইট
         let seg = trimmed.startsWith('http') ? trimmed : new URL(trimmed, baseUrl).href;
         return `${proxyBase}?url=${encodeURIComponent(seg)}&referer=${encodeURIComponent(ref)}`;
       }).join('\n');
@@ -248,8 +232,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-        'Access-Control-Allow-Headers': '*',
         'Cache-Control': 'no-cache, no-store'
       });
       return res.send(rewritten);
@@ -258,26 +240,20 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     res.set({
       'Content-Type': response.headers['content-type'] || 'video/mp2t',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
       'Accept-Ranges': 'bytes'
     });
 
     response.data.pipe(res);
   } catch (error) {
-    res.status(502).send('Stream Gateway Error');
+    res.status(502).send('Gateway Error: Unreachable Stream');
   }
 }
 
-// ============================================================================
-// ৬. API এন্ডপয়েন্ট
-// ============================================================================
+// API Routes
 app.get('/api/resolve-stream', async (req, res) => {
   const { id, s = 1, e = 1, type = 'movie' } = req.query;
 
-  if (!id) {
-    return res.status(400).json({ success: false, error: 'Media TMDB ID required' });
-  }
+  if (!id) return res.status(400).json({ success: false, error: 'TMDB ID required' });
 
   const params = {
     id: id.toString(),
@@ -352,7 +328,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/', (req, res) => res.send('🚀 High-Speed Unified Stream Engine Online!'));
+app.get('/', (req, res) => res.send('⚡ Native Stream Engine Running.'));
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 Active on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Engine online on port ${PORT}`));
