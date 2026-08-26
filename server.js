@@ -1,9 +1,7 @@
 const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
@@ -15,31 +13,10 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ============================================================================
-// ১. সিকিউরিটি ও মিডলওয়্যার কনফিগারেশন
+// ১. ফুল-ওপেন CORS ও প্রি-ফ্লাইট হ্যান্ডলার (ওয়েব ব্রাউজার ফিক্স)
 // ============================================================================
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-  crossOriginEmbedderPolicy: false
-}));
-
-const ALLOWED_ORIGINS = [
-  'https://homeairtv.xubilaswebdevcorp.shop',
-  'https://anime.hmair.xyz',
-  'https://hmair.xyz',
-  'https://www.hmair.xyz',
-  'https://2.0.hmair.xyz',
-  'http://localhost:3000',
-  'http://localhost:5173'
-];
-
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
-      return callback(null, true);
-    }
-    return callback(new Error('Access Denied: Hotlinking Prohibited'));
-  },
+  origin: '*',
   methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
   allowedHeaders: '*'
 }));
@@ -53,155 +30,57 @@ app.use((req, res, next) => {
   next();
 });
 
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
-  message: { success: false, error: 'Too many requests, please try again later.' }
-});
-app.use('/api/', apiLimiter);
-
 // ============================================================================
-// ২. হাই-পারফরম্যান্স ব্রাউজার পুল ও লাইফসাইকেল কন্ট্রোলার
+// ২. ব্রাউজার পুল ও ক্যাশ
 // ============================================================================
-class BrowserPool {
+class FastBrowserPool {
   constructor() {
     this.browser = null;
-    this.isLaunching = false;
-    this.launchPromise = null;
+    this.launching = null;
   }
 
   async getBrowser() {
-    if (this.browser && this.browser.isConnected()) {
+    if (this.browser && this.browser.isConnected()) return this.browser;
+    if (this.launching) return this.launching;
+
+    this.launching = (async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-fast-'));
+      this.browser = await puppeteer.launch({
+        headless: 'new',
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        userDataDir: tempDir,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-zygote',
+          '--single-process',
+          '--disable-extensions',
+          '--disable-web-security',
+          '--blink-settings=imagesEnabled=false',
+          '--disable-remote-fonts',
+          '--mute-audio'
+        ]
+      });
+      this.launching = null;
       return this.browser;
-    }
-
-    if (this.isLaunching) {
-      return this.launchPromise;
-    }
-
-    this.isLaunching = true;
-    this.launchPromise = (async () => {
-      try {
-        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-cluster-'));
-        this.browser = await puppeteer.launch({
-          headless: 'new',
-          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-          userDataDir: tempDir,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-zygote',
-            '--single-process',
-            '--disable-extensions',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--blink-settings=imagesEnabled=false',
-            '--disable-remote-fonts',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--mute-audio'
-          ]
-        });
-
-        this.browser.on('disconnected', () => {
-          this.browser = null;
-        });
-
-        return this.browser;
-      } finally {
-        this.isLaunching = false;
-      }
     })();
 
-    return this.launchPromise;
-  }
-
-  async createStealthPage() {
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 720 });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
-    await page.setRequestInterception(true);
-
-    page.on('request', (req) => {
-      const resourceType = req.resourceType();
-      const url = req.url().toLowerCase();
-
-      if (
-        ['image', 'font', 'stylesheet', 'media'].includes(resourceType) ||
-        url.includes('google-analytics') ||
-        url.includes('doubleclick') ||
-        url.includes('adsystem') ||
-        url.includes('popunder') ||
-        url.includes('histats')
-      ) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    return page;
+    return this.launching;
   }
 }
 
-const pool = new BrowserPool();
+const pool = new FastBrowserPool();
+pool.getBrowser().catch(() => {});
+
+const streamCache = new Map();
+const pendingResolvers = new Map();
 
 // ============================================================================
-// ৩. ইন-মেমোরি LRU ক্যাশিং এবং রিকোয়েস্ট ডি-ডুপ্লিকেশন
+// ৩. প্রোভাইডার রেজিস্ট্রি
 // ============================================================================
-class StreamCacheManager {
-  constructor(ttl = 12 * 60 * 60 * 1000) {
-    this.cache = new Map();
-    this.ttl = ttl;
-    this.pendingResolvers = new Map();
-  }
-
-  get(key) {
-    const item = this.cache.get(key);
-    if (!item) return null;
-    if (Date.now() - item.time > this.ttl) {
-      this.cache.delete(key);
-      return null;
-    }
-    return item;
-  }
-
-  set(key, data) {
-    this.cache.set(key, { ...data, time: Date.now() });
-    if (this.cache.size > 2000) {
-      const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
-    }
-  }
-
-  async executeDeduplicated(key, taskFn) {
-    if (this.pendingResolvers.has(key)) {
-      return this.pendingResolvers.get(key);
-    }
-
-    const taskPromise = (async () => {
-      try {
-        return await taskFn();
-      } finally {
-        this.pendingResolvers.delete(key);
-      }
-    })();
-
-    this.pendingResolvers.set(key, taskPromise);
-    return taskPromise;
-  }
-}
-
-const streamCache = new StreamCacheManager();
-
-// ============================================================================
-// ৪. মাল্টি-প্রোভাইডার স্ক্র্যাপিং ইঞ্জিন (Race + Fallback Strategy)
-// ============================================================================
-const PROVIDER_REGISTRY = [
+const PROVIDERS = [
   {
     name: 'Vidnest',
     buildUrl: (p) => p.isTv ? `https://vidnest.fun/tv/${p.id}/${p.s}/${p.e}` : `https://vidnest.fun/movie/${p.id}`,
@@ -221,96 +100,95 @@ const PROVIDER_REGISTRY = [
     name: 'VidLink',
     buildUrl: (p) => p.isTv ? `https://vidlink.pro/tv/${p.id}/${p.s}/${p.e}` : `https://vidlink.pro/movie/${p.id}`,
     referer: 'https://vidlink.pro/'
-  },
-  {
-    name: 'VidSrcSBS',
-    buildUrl: (p) => p.isTv ? `https://vidsrc.sbs/embed/tv/${p.id}/${p.s}/${p.e}` : `https://vidsrc.sbs/embed/movie/${p.id}`,
-    referer: 'https://vidsrc.sbs/'
   }
 ];
 
-async function executeStealthScrape(targetUrl, refererUrl, timeoutMs = 12000) {
+// ============================================================================
+// ৪. ফাস্ট ব্রাউজার স্ক্র্যাপার
+// ============================================================================
+async function fastBrowserScrape(browser, targetUrl, referer) {
   let page = null;
   try {
-    page = await pool.createStealthPage();
-    await page.setExtraHTTPHeaders({
-      'accept-language': 'en-US,en;q=0.9',
-      'referer': refererUrl
-    });
+    page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 720 });
+    await page.setRequestInterception(true);
 
-    return await new Promise((resolve) => {
+    return await new Promise((resolve, reject) => {
       let resolved = false;
 
-      const evaluateStreamUrl = (u) => {
-        const lower = u.toLowerCase();
-        const isMediaStream = (
-          lower.includes('.m3u8') ||
-          lower.includes('/hls/') ||
-          lower.includes('master.m3u8') ||
-          lower.includes('playlist.m3u8') ||
-          lower.includes('nasty.m3u8') ||
-          (lower.includes('.mp4') && !lower.includes('google') && !lower.includes('trailer'))
-        ) && !lower.includes('preview') && !lower.includes('demo');
-
-        if (isMediaStream && !resolved) {
+      const finish = (url) => {
+        if (!resolved) {
           resolved = true;
           page.close().catch(() => {});
-          resolve({ streamUrl: u, referer: refererUrl });
+          resolve({ streamUrl: url, referer });
         }
       };
 
-      page.on('response', (res) => evaluateStreamUrl(res.url()));
-      page.on('request', (req) => evaluateStreamUrl(req.url()));
+      const checkUrl = (u) => {
+        const lower = u.toLowerCase();
+        if (
+          (lower.includes('.m3u8') || lower.includes('/hls/') || lower.includes('nasty.m3u8')) &&
+          !lower.includes('trailer') && !lower.includes('preview')
+        ) {
+          finish(u);
+        }
+      };
 
-      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
+      page.on('request', (req) => {
+        const type = req.resourceType();
+        const u = req.url();
+        checkUrl(u);
+
+        if (['image', 'font', 'stylesheet', 'media'].includes(type) || u.includes('analytics') || u.includes('ads')) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
+      page.on('response', (res) => checkUrl(res.url()));
+
+      page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 5000 })
         .then(async () => {
-          for (let step = 0; step < 3; step++) {
-            if (resolved) break;
-            const frames = [page.mainFrame(), ...page.frames()];
-            for (const frame of frames) {
-              try {
-                await frame.evaluate(() => {
-                  const selectors = ['video', 'button', '#play', '.play-btn', '.jw-display-icon-container', '.vjs-big-play-button', '[class*="play"]'];
-                  document.querySelectorAll(selectors.join(',')).forEach(el => el.click());
-                });
-              } catch (e) {}
-            }
-            await new Promise(r => setTimeout(r, 800));
+          if (resolved) return;
+          const frames = [page.mainFrame(), ...page.frames()];
+          for (const frame of frames) {
+            try {
+              await frame.evaluate(() => {
+                const el = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, [class*="play"]');
+                if (el) el.click();
+              });
+            } catch (e) {}
           }
         })
         .catch(() => {});
 
-      setTimeout(async () => {
+      setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          if (page) await page.close().catch(() => {});
-          resolve(null);
+          page.close().catch(() => {});
+          reject(new Error('Timeout on provider: ' + targetUrl));
         }
-      }, timeoutMs);
+      }, 4500);
     });
   } catch (err) {
     if (page) await page.close().catch(() => {});
+    throw err;
+  }
+}
+
+async function resolveFastestStream(params) {
+  const browser = await pool.getBrowser();
+  const raceTasks = PROVIDERS.map(p => fastBrowserScrape(browser, p.buildUrl(params), p.referer));
+  try {
+    return await Promise.any(raceTasks);
+  } catch (err) {
     return null;
   }
 }
 
-async function resolveMasterStream(params) {
-  for (const provider of PROVIDER_REGISTRY) {
-    const targetUrl = provider.buildUrl(params);
-    const result = await executeStealthScrape(targetUrl, provider.referer, 8500);
-    if (result && result.streamUrl) {
-      return {
-        streamUrl: result.streamUrl,
-        referer: provider.referer,
-        provider: provider.name
-      };
-    }
-  }
-  return null;
-}
-
 // ============================================================================
-// ৫. অ্যাডভান্সড মিডিয়া টানেল প্রক্সি (HLS Playlist, AES-128 & Chunk Rewriter)
+// ৫. ডিপ HLS ও AES-128 কী রিরাইটার (ওয়েব প্লেয়ার ফিক্স)
 // ============================================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -320,9 +198,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         const decoded = decodeURIComponent(cleanUrl);
         if (decoded === cleanUrl) break;
         cleanUrl = decoded;
-      } catch (e) {
-        break;
-      }
+      } catch (e) { break; }
     }
 
     const domain = new URL(cleanUrl).origin;
@@ -349,71 +225,58 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
       const lines = response.data.split('\n');
 
-      const rewrittenLines = lines.map((line) => {
+      const rewritten = lines.map(line => {
         const trimmed = line.trim();
         if (!trimmed) return line;
 
-        // AES-128 এনক্রিপশন কী ও সাব-স্ট্রিম রিরাইট
+        // AES-128 Encryption Key এবং Sub-Audio Track রিরাইট
         if (trimmed.startsWith('#')) {
           if (trimmed.includes('URI="')) {
             return line.replace(/URI="([^"]+)"/g, (match, keyUrl) => {
-              try {
-                let absKeyUrl = keyUrl;
-                if (!absKeyUrl.startsWith('http://') && !absKeyUrl.startsWith('https://')) {
-                  absKeyUrl = new URL(keyUrl, baseUrl).href;
-                }
-                return `URI="${proxyBase}?url=${encodeURIComponent(absKeyUrl)}&referer=${encodeURIComponent(ref)}"`;
-              } catch {
-                return match;
-              }
+              let abs = keyUrl.startsWith('http') ? keyUrl : new URL(keyUrl, baseUrl).href;
+              return `URI="${proxyBase}?url=${encodeURIComponent(abs)}&referer=${encodeURIComponent(ref)}"`;
             });
           }
           return line;
         }
 
-        // মিডিয়া সেগমেন্ট (.ts / .m4s / সাব-প্লেলিস্ট) প্রক্সির মাধ্যমে রিরাইট
-        try {
-          let segmentUrl = trimmed;
-          if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
-            segmentUrl = new URL(trimmed, baseUrl).href;
-          }
-          return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
-        } catch {
-          return line;
-        }
-      });
+        // সব মিডিয়া ও প্লেলিস্ট সেগমেন্ট রিরাইট
+        let seg = trimmed.startsWith('http') ? trimmed : new URL(trimmed, baseUrl).href;
+        return `${proxyBase}?url=${encodeURIComponent(seg)}&referer=${encodeURIComponent(ref)}`;
+      }).join('\n');
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
         'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
+        'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+        'Access-Control-Allow-Headers': '*',
+        'Cache-Control': 'no-cache, no-store'
       });
-      return res.send(rewrittenLines.join('\n'));
+      return res.send(rewritten);
     }
 
     res.set({
       'Content-Type': response.headers['content-type'] || 'video/mp2t',
       'Access-Control-Allow-Origin': '*',
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'public, max-age=86400'
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+      'Access-Control-Allow-Headers': '*',
+      'Accept-Ranges': 'bytes'
     });
 
     response.data.pipe(res);
   } catch (error) {
-    res.status(502).send('Gateway Stream Error: Segment Unreachable');
+    res.status(502).send('Stream Gateway Error');
   }
 }
 
 // ============================================================================
-// ৬. পাবলিক API এন্ডপয়েন্ট
+// ৬. API এন্ডপয়েন্ট
 // ============================================================================
 app.get('/api/resolve-stream', async (req, res) => {
-  const { id, s = 1, e = 1, type = 'movie', lang = 'sub' } = req.query;
+  const { id, s = 1, e = 1, type = 'movie' } = req.query;
 
   if (!id) {
-    return res.status(400).json({ success: false, error: 'Media TMDB ID is required.' });
+    return res.status(400).json({ success: false, error: 'Media TMDB ID required' });
   }
 
   const params = {
@@ -421,93 +284,75 @@ app.get('/api/resolve-stream', async (req, res) => {
     isTv: type.toLowerCase() === 'tv' || type.toLowerCase() === 'series',
     s: parseInt(s, 10) || 1,
     e: parseInt(e, 10) || 1,
-    type: type.toLowerCase(),
-    lang: lang.toLowerCase()
+    type: type.toLowerCase()
   };
 
   const cacheKey = `stream_${params.id}_${params.type}_${params.s}_${params.e}`;
-  const cached = streamCache.get(cacheKey);
-
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
-  if (cached) {
+  if (streamCache.has(cacheKey)) {
+    const cached = streamCache.get(cacheKey);
     return res.json({
       success: true,
       isEmbed: false,
       streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.streamUrl)}&referer=${encodeURIComponent(cached.referer)}`,
       rawUrl: cached.streamUrl,
-      provider: cached.provider,
       cached: true,
       type: params.type
     });
   }
 
-  try {
-    const result = await streamCache.executeDeduplicated(cacheKey, async () => {
-      return await resolveMasterStream(params);
-    });
-
-    if (result && result.streamUrl) {
-      streamCache.set(cacheKey, result);
+  if (pendingResolvers.has(cacheKey)) {
+    const result = await pendingResolvers.get(cacheKey);
+    if (result) {
       return res.json({
         success: true,
         isEmbed: false,
         streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.streamUrl)}&referer=${encodeURIComponent(result.referer)}`,
         rawUrl: result.streamUrl,
-        provider: result.provider,
-        cached: false,
         type: params.type
       });
     }
+  }
 
-    // অলটারনেটিভ ফলব্যাক এমবেড
-    const fallbackEmbed = params.isTv
-      ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.s}/${params.e}`
-      : `https://player.autoembed.cc/embed/movie/${params.id}`;
+  const task = resolveFastestStream(params);
+  pendingResolvers.set(cacheKey, task);
 
+  const finalResult = await task;
+  pendingResolvers.delete(cacheKey);
+
+  if (finalResult && finalResult.streamUrl) {
+    streamCache.set(cacheKey, finalResult);
     return res.json({
       success: true,
-      isEmbed: true,
-      streamUrl: fallbackEmbed,
-      embedUrl: fallbackEmbed,
+      isEmbed: false,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.streamUrl)}&referer=${encodeURIComponent(finalResult.referer)}`,
+      rawUrl: finalResult.streamUrl,
+      cached: false,
       type: params.type
     });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: 'Internal resolver exception.' });
   }
+
+  const fallbackEmbed = params.isTv
+    ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.s}/${params.e}`
+    : `https://player.autoembed.cc/embed/movie/${params.id}`;
+
+  return res.json({
+    success: true,
+    isEmbed: true,
+    streamUrl: fallbackEmbed,
+    embedUrl: fallbackEmbed,
+    type: params.type
+  });
 });
 
 app.get('/api/stream-proxy', async (req, res) => {
   const { url, referer } = req.query;
-  if (!url) return res.status(400).send('Stream Target URL missing.');
+  if (!url) return res.status(400).send('URL missing');
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    uptime: process.uptime(),
-    memoryUsage: process.memoryUsage(),
-    cacheSize: streamCache.cache.size
-  });
-});
+app.get('/', (req, res) => res.send('🚀 High-Speed Unified Stream Engine Online!'));
 
-app.get('/', (req, res) => {
-  res.send('🚀 Enterprise Multi-Provider Stream Tunnel Engine Online.');
-});
-
-// ============================================================================
-// ৭. প্রসেস রানার ও গ্রেসফুল শাটডাউন
-// ============================================================================
 const PORT = process.env.PORT || 8080;
-const server = app.listen(PORT, () => {
-  console.log(`🚀 Production Server listening on port ${PORT}`);
-});
-
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received. Cleaning browser pool and shutting down...');
-  if (pool.browser) {
-    await pool.browser.close().catch(() => {});
-  }
-  server.close(() => process.exit(0));
-});
+app.listen(PORT, () => console.log(`🚀 Active on Port ${PORT}`));
