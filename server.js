@@ -8,7 +8,7 @@ app.set('trust proxy', 1);
 app.use(cors());
 
 // ========================================================
-// কাস্টম ACCESS DENIED HTML টেমপ্লেট
+// ১. এন্টারপ্রাইজ কনফিগারেশন ও সিকিউরিটি গার্ড
 // ========================================================
 const ACCESS_DENIED_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -51,7 +51,7 @@ const ACCESS_DENIED_HTML = `<!DOCTYPE html>
     <p>ভাই লিংক কপি করে লাভ নেই! দয়া করে অফিসিয়াল প্ল্যাটফর্মে স্ট্রিম করুন।</p>
     <a href="https://hmair.xyz" class="btn">Watch on Official Website</a>
     <a href="https://t.me/homeairtv" class="btn-tg" target="_blank" rel="noopener noreferrer">JOIN TG</a>
-    <div class="footer-note">Protected by Stream Proxy Shield • 2026</div>
+    <div class="footer-note">Protected by Enterprise Shield • 2026</div>
   </div>
 </body>
 </html>`;
@@ -66,13 +66,18 @@ const ALLOWED_ORIGINS = [
   'http://localhost:5173'
 ];
 
+// পারফরম্যান্স ক্যাশ ও কনকারেন্সি প্রটেকশন
 const streamCache = new Map();
+const activeScrapes = new Map();
+const CACHE_TTL = 12 * 60 * 60 * 1000; // ১২ ঘণ্টা ক্যাশ মেয়াদ
 
 app.get('/', (req, res) => {
-  res.send('Multi-Provider Stream Scraper API is running smoothly.');
+  res.send('🚀 Enterprise Master Stream Scraper & Proxy Engine is Online!');
 });
 
-// মাল্টি-প্রোভাইডার ফলব্যাক স্ক্র্যাপার ফাংশন
+// ========================================================
+// ২. কোর স্ক্র্যাপার ইঞ্জিন (Multi-Provider Fallback Chain)
+// ========================================================
 async function scrapeFromProvider(browser, targetUrl, refererUrl) {
   const page = await browser.newPage();
   
@@ -82,25 +87,27 @@ async function scrapeFromProvider(browser, targetUrl, refererUrl) {
   });
   
   await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
   );
 
   let streamUrl = null;
 
   page.on('response', async (response) => {
     const url = response.url();
+    const lower = url.toLowerCase();
     if (
-      url.includes('.m3u8') ||  
-      url.includes('master.m3u8') ||  
-      url.includes('/hls/') ||  
-      url.includes('playlist.m3u8')
+      lower.includes('.m3u8') ||  
+      lower.includes('master.m3u8') ||  
+      lower.includes('/hls/') ||  
+      lower.includes('playlist.m3u8') ||
+      lower.includes('streamraiwind')
     ) {
-      streamUrl = url;
+      if (!streamUrl) streamUrl = url;
     }
   });
 
   try {
-    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 10000 });
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 9000 });
   } catch (e) {}
 
   try {
@@ -114,16 +121,18 @@ async function scrapeFromProvider(browser, targetUrl, refererUrl) {
   } catch (e) {}
 
   let waitTime = 0;
-  while (!streamUrl && waitTime < 6000) {
-    await new Promise(r => setTimeout(r, 500));
-    waitTime += 500;
+  while (!streamUrl && waitTime < 5000) {
+    await new Promise(r => setTimeout(r, 400));
+    waitTime += 400;
   }
 
   await page.close().catch(() => {});
   return streamUrl;
 }
 
-// ১. Multi-Provider Fallback Resolver API
+// ========================================================
+// ৩. মাস্টার API এন্ডপয়েন্ট (Resolve Stream)
+// ========================================================
 app.get('/api/resolve-stream', async (req, res) => {
   const { id, s = 1, e = 1, type = 'movie' } = req.query;
 
@@ -132,84 +141,108 @@ app.get('/api/resolve-stream', async (req, res) => {
   }
 
   const cacheKey = `${id}_${type}_${s}_${e}`;
+  
+  // ক্যাশ চেক
   if (streamCache.has(cacheKey)) {
     const cached = streamCache.get(cacheKey);
-    const hostUrl = `${req.protocol}://${req.get('host')}`;
-    return res.json({
-      success: true,
-      isEmbed: false,
-      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`,
-      rawUrl: cached.url,
-      type
-    });
-  }
-
-  // প্রোভাইডার চেইন লিস্ট (Vidnest -> VidRock -> AutoEmbed -> VidLink)
-  const providers = type === 'tv' ? [
-    { url: `https://vidnest.fun/tv/${id}/${s}/${e}`, ref: 'https://vidnest.fun/' },
-    { url: `https://vidrock.net/embed/tv/${id}/${s}/${e}`, ref: 'https://vidrock.net/' },
-    { url: `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}`, ref: 'https://autoembed.cc/' },
-    { url: `https://vidlink.pro/tv/${id}/${s}/${e}`, ref: 'https://vidlink.pro/' }
-  ] : [
-    { url: `https://vidnest.fun/movie/${id}`, ref: 'https://vidnest.fun/' },
-    { url: `https://vidrock.net/embed/movie/${id}`, ref: 'https://vidrock.net/' },
-    { url: `https://player.autoembed.cc/embed/movie/${id}`, ref: 'https://autoembed.cc/' },
-    { url: `https://vidlink.pro/movie/${id}`, ref: 'https://vidlink.pro/' }
-  ];
-
-  let browser = null;
-
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,720'
-      ]
-    });
-
-    let streamUrl = null;
-    let activeRef = '';
-
-    // একটার পর একটা প্রোভাইডার ট্রাই করতে থাকবে যতক্ষণ না লিংক পাওয়া যায়
-    for (const provider of providers) {
-      try {
-        streamUrl = await scrapeFromProvider(browser, provider.url, provider.ref);
-        if (streamUrl) {
-          activeRef = provider.ref;
-          break;
-        }
-      } catch (err) {}
-    }
-
-    await browser.close();
-
-    if (streamUrl) {
-      streamCache.set(cacheKey, { url: streamUrl, ref: activeRef, time: Date.now() });
+    if (Date.now() - cached.time < CACHE_TTL) {
       const hostUrl = `${req.protocol}://${req.get('host')}`;
       return res.json({
         success: true,
         isEmbed: false,
-        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(activeRef)}`,
-        rawUrl: streamUrl,
+        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`,
+        rawUrl: cached.url,
         type
       });
     } else {
-      return res.status(404).json({ success: false, error: 'All fallback providers failed to capture stream.' });
+      streamCache.delete(cacheKey);
     }
-
-  } catch (error) {
-    if (browser) await browser.close();
-    return res.status(500).json({ success: false, error: error.message });
   }
+
+  // কনকারেন্সি লক (একই মুভির জন্য মাল্টিপল রিকোয়েস্ট ঠেকানোর জন্য)
+  if (activeScrapes.has(cacheKey)) {
+    try {
+      const result = await activeScrapes.get(cacheKey);
+      if (result) {
+        const hostUrl = `${req.protocol}://${req.get('host')}`;
+        return res.json({
+          success: true,
+          isEmbed: false,
+          streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
+          rawUrl: result.url,
+          type
+        });
+      }
+    } catch (e) {}
+  }
+
+  const scrapeTask = (async () => {
+    const providers = type === 'tv' ? [
+      { url: `https://vidnest.fun/tv/${id}/${s}/${e}`, ref: 'https://vidnest.fun/' },
+      { url: `https://vidrock.net/embed/tv/${id}/${s}/${e}`, ref: 'https://vidrock.net/' },
+      { url: `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}`, ref: 'https://autoembed.cc/' },
+      { url: `https://vidlink.pro/tv/${id}/${s}/${e}`, ref: 'https://vidlink.pro/' }
+    ] : [
+      { url: `https://vidnest.fun/movie/${id}`, ref: 'https://vidnest.fun/' },
+      { url: `https://vidrock.net/embed/movie/${id}`, ref: 'https://vidrock.net/' },
+      { url: `https://player.autoembed.cc/embed/movie/${id}`, ref: 'https://autoembed.cc/' },
+      { url: `https://vidlink.pro/movie/${id}`, ref: 'https://vidlink.pro/' }
+    ];
+
+    let browser = null;
+    try {
+      browser = await puppeteer.launch({
+        headless: 'new',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-blink-features=AutomationControlled',
+          '--window-size=1280,720'
+        ]
+      });
+
+      for (const provider of providers) {
+        try {
+          const streamUrl = await scrapeFromProvider(browser, provider.url, provider.ref);
+          if (streamUrl) {
+            await browser.close();
+            return { url: streamUrl, ref: provider.ref };
+          }
+        } catch (err) {}
+      }
+
+      await browser.close();
+      return null;
+    } catch (err) {
+      if (browser) await browser.close();
+      return null;
+    } finally {
+      activeScrapes.delete(cacheKey);
+    }
+  })();
+
+  activeScrapes.set(cacheKey, scrapeTask);
+  const finalResult = await scrapeTask;
+
+  if (finalResult) {
+    streamCache.set(cacheKey, { url: finalResult.url, ref: finalResult.ref, time: Date.now() });
+    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    return res.json({
+      success: true,
+      isEmbed: false,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
+      rawUrl: finalResult.url,
+      type
+    });
+  }
+
+  return res.status(404).json({ success: false, error: 'All enterprise fallback providers failed to resolve stream.' });
 });
 
 // ========================================================
-// মাল্টি-স্ট্রিম মিডিয়া টানেল প্রক্সি
+// ৪. এন্টারপ্রাইজ মিডিয়া টানেল প্রক্সি (Segment & Audio-Video Sync Rewriter)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -237,7 +270,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         'Origin': ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      timeout: 20000
+      timeout: 25000
     });
 
     if (cleanUrl.includes('.m3u8')) {
@@ -315,7 +348,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-// MovieBox Play Route
+// MovieBox / Native Play Route
 app.get('/api/moviebox/play', async (req, res) => {
   const { id, s = 1, e = 1, type = 'movie' } = req.query;
   const cacheKey = `${id}_${type}_${s}_${e}`;
@@ -329,4 +362,4 @@ app.get('/api/moviebox/play', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Enterprise Master Server active on port ${PORT}`));
