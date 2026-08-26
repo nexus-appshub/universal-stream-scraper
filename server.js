@@ -93,7 +93,6 @@ async function resolveDubStream(params) {
     anilistId = ext.anilistId;
   }
 
-  // MAL / AniList Endpoint (DUB Only)
   if (malId) return `https://megaplay.buzz/stream/mal/${malId}/${episode}/dub`;
   if (anilistId) return `https://megaplay.buzz/stream/ani/${anilistId}/${episode}/dub`;
 
@@ -168,7 +167,7 @@ async function fastScrape(browser, targetUrl) {
     try {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
       await page.evaluate(() => {
-        const btn = document.querySelector('video, button, #play, .play-btn');
+        const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
         if (btn) btn.click();
       });
     } catch (e) {}
@@ -258,7 +257,7 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
 }
 
 function parseParams(query) {
-  const targetId = query.id || query.tmdbId || '27205';
+  const targetId = query.id || query.tmdbId || query.tmdb_id || '27205';
   const typeStr = (query.type || query.media_type || 'movie').toLowerCase();
   const title = query.title || '';
   const isTv = typeStr === 'tv' || typeStr === 'series' || typeStr === 'anime';
@@ -273,9 +272,9 @@ function parseParams(query) {
 }
 
 // ========================================================
-// ৪. মেইন JSON RESOLVER API (HIGH TRAFFIC OPTIMIZED)
+// ৪. মেইন RESOLVER API
 // ========================================================
-app.get('/api/resolve-stream', async (req, res) => {
+async function handleResolveStream(req, res) {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
 
@@ -295,7 +294,6 @@ app.get('/api/resolve-stream', async (req, res) => {
 
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
-  // ১. মেমোরি ক্যাশ হিট চেক (মিলিসেকেন্ড রেসপন্স)
   if (streamCache.has(cacheKey)) {
     const cached = streamCache.get(cacheKey);
     return res.json({
@@ -303,11 +301,12 @@ app.get('/api/resolve-stream', async (req, res) => {
       isEmbed: false,
       streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`,
       rawUrl: cached.url,
+      proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`,
+      stream_url: cached.url,
       type: params.typeStr
     });
   }
 
-  // ২. কনকারেন্সি লকার (একই টাইটেলের জন্য মাত্র ১টি ব্রাউজার সেশন ওপেন হবে)
   if (pendingScrapes.has(cacheKey)) {
     try {
       const result = await pendingScrapes.get(cacheKey);
@@ -317,13 +316,14 @@ app.get('/api/resolve-stream', async (req, res) => {
           isEmbed: false,
           streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
           rawUrl: result.url,
+          proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
+          stream_url: result.url,
           type: params.typeStr
         });
       }
     } catch (e) {}
   }
 
-  // ৩. নতুন স্ক্র্যাপ টাস্ক
   const scrapeTask = (async () => {
     try {
       const browser = await getWarmBrowser();
@@ -345,7 +345,6 @@ app.get('/api/resolve-stream', async (req, res) => {
   })();
 
   pendingScrapes.set(cacheKey, scrapeTask);
-
   const finalResult = await scrapeTask;
 
   if (finalResult) {
@@ -354,6 +353,8 @@ app.get('/api/resolve-stream', async (req, res) => {
       isEmbed: false,
       streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
       rawUrl: finalResult.url,
+      proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
+      stream_url: finalResult.url,
       type: params.typeStr
     });
   }
@@ -367,8 +368,38 @@ app.get('/api/resolve-stream', async (req, res) => {
     isEmbed: true,
     streamUrl: fallbackEmbed,
     embedUrl: fallbackEmbed,
+    proxy_stream_url: fallbackEmbed,
+    stream_url: fallbackEmbed,
     type: params.typeStr
   });
+}
+
+app.get(['/api/resolve-stream', '/api/v1/extract'], handleResolveStream);
+
+// ডাইরেক্ট স্ট্রিম রিডাইরেক্ট রাউট
+app.get('/api/v1/stream', async (req, res) => {
+  const params = parseParams(req.query);
+  const hostUrl = `${req.protocol}://${req.get('host')}`;
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  
+  let targetStream = streamCache.get(cacheKey);
+  if (!targetStream) {
+    const browser = await getWarmBrowser();
+    const urls = getWebProviderUrls(params);
+    for (const url of urls) {
+      const streamUrl = await fastScrape(browser, url);
+      if (streamUrl) {
+        targetStream = { url: streamUrl, ref: url, time: Date.now() };
+        streamCache.set(cacheKey, targetStream);
+        break;
+      }
+    }
+  }
+
+  if (targetStream) {
+    return res.redirect(`${hostUrl}/api/stream-proxy?url=${encodeURIComponent(targetStream.url)}&referer=${encodeURIComponent(targetStream.ref)}`);
+  }
+  return res.status(404).send('Stream not found.');
 });
 
 // ========================================================
@@ -424,75 +455,149 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
   }
 });
 
-// টানেল হ্যান্ডলার
-app.get('/api/moviebox/play', async (req, res) => {
-  const params = parseParams(req.query);
-  if (params.lang === 'dub') {
-    const dubEmbed = await resolveDubStream(params);
-    return res.redirect(dubEmbed);
+// টোকেন ও রিলেটিভ পাথ রিজলভার হেল্পার
+function resolveChunkWithToken(chunk, parentUrlObj) {
+  try {
+    let resolved;
+    if (chunk.startsWith('http://') || chunk.startsWith('https://')) {
+      resolved = new URL(chunk);
+    } else {
+      resolved = new URL(chunk, parentUrlObj.href);
+    }
+    // প্যারেন্ট M3U8-এর টোকেন সেগমেন্টে ইনহেরিট করা
+    if (!resolved.search && parentUrlObj.search) {
+      resolved.search = parentUrlObj.search;
+    }
+    return resolved.href;
+  } catch (e) {
+    return chunk;
   }
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
-  const cached = streamCache.get(cacheKey);
-  if (cached) return pipeMediaTunnel(req, res, cached.url, cached.ref);
-  return res.status(404).send('Stream Offline');
-});
+}
 
+// ========================================================
+// ৬. টোকেন-প্রিজার্ভিং মিডিয়া টানেল প্রক্সি
+// ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
-    const domain = new URL(targetUrl).origin;
-    const ref = referer || domain;
-    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    let cleanUrl = targetUrl;
+    while (cleanUrl.includes('%3A') || cleanUrl.includes('%2F')) {
+      try {
+        const d = decodeURIComponent(cleanUrl);
+        if (d === cleanUrl) break;
+        cleanUrl = d;
+      } catch (e) { break; }
+    }
+
+    const targetUrlObj = new URL(cleanUrl);
+    const domain = targetUrlObj.origin;
+    const ref = referer ? decodeURIComponent(referer) : domain;
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
     const host = req.get('host');
     const proxyBase = `${protocol}://${host}/api/stream-proxy`;
 
+    // ক্রোম ব্রাউজার ট্যাবে সরাসরি লিঙ্ক খুললে অটো-প্লেয়ার প্রদান
+    const acceptHeader = req.headers['accept'] || '';
+    if (acceptHeader.includes('text/html') && !req.headers.range && !cleanUrl.includes('.ts')) {
+      const htmlPlayer = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Stream Preview</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    body { margin:0; background:#000; display:flex; align-items:center; justify-content:center; height:100vh; overflow:hidden; }
+    video { width:100%; height:100%; object-fit:contain; }
+  </style>
+</head>
+<body>
+  <video id="v" controls autoplay playsinline></video>
+  <script>
+    const v = document.getElementById('v');
+    const src = "${proxyBase}?url=${encodeURIComponent(cleanUrl)}&referer=${encodeURIComponent(ref)}&raw=1";
+    if (Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true });
+      hls.loadSource(src);
+      hls.attachMedia(v);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(()=>{}));
+    } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = src;
+    }
+  </script>
+</body>
+</html>`;
+      res.set('Content-Type', 'text/html; charset=utf-8');
+      return res.send(htmlPlayer);
+    }
+
     const response = await axios({
       method: 'GET',
-      url: targetUrl,
-      responseType: targetUrl.includes('.m3u8') ? 'text' : 'stream',
+      url: cleanUrl,
+      responseType: 'arraybuffer',
       headers: {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ...(req.headers.range ? { 'Range': req.headers.range } : {})
       },
-      timeout: 15000
+      timeout: 25000
     });
 
-    if (targetUrl.includes('.m3u8')) {
-      const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
-      const lines = response.data.split('\n');
+    const buffer = Buffer.from(response.data);
+    const textPreview = buffer.slice(0, 500).toString('utf8');
+    const isM3u8 = textPreview.includes('#EXTM3U') || textPreview.includes('#EXT-X-');
+
+    if (isM3u8) {
+      const utf8Text = buffer.toString('utf8');
+      const lines = utf8Text.split('\n');
 
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
-          let segmentUrl = trimmed;
-          if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
-            segmentUrl = new URL(trimmed, baseUrl).href;
+        if (!trimmed) return line;
+
+        // AES-128 কী এবং সাব-প্লেলিস্ট টোকেন হ্যান্ডলার
+        if (trimmed.startsWith('#')) {
+          if (trimmed.includes('URI="')) {
+            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
+              const absKey = resolveChunkWithToken(p1, targetUrlObj);
+              return `URI="${proxyBase}?url=${encodeURIComponent(absKey)}&referer=${encodeURIComponent(ref)}"`;
+            });
           }
-          return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
+          return line;
         }
-        return line;
+
+        // সেগমেন্ট লিঙ্ক রিরাইটিং ও টোকেন ধরে রাখা
+        const absChunk = resolveChunkWithToken(trimmed, targetUrlObj);
+        return `${proxyBase}?url=${encodeURIComponent(absChunk)}&referer=${encodeURIComponent(ref)}`;
       }).join('\n');
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
+        'Cache-Control': 'no-cache, no-store'
       });
       return res.send(rewritten);
     }
 
+    let contentType = response.headers['content-type'] || 'video/mp2t';
+    if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
+      contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
+    }
+
     res.set({
-      'Content-Type': response.headers['content-type'] || 'video/mp4',
+      'Content-Type': contentType,
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
       'Accept-Ranges': 'bytes'
     });
 
-    response.data.pipe(res);
+    return res.send(buffer);
   } catch (error) {
-    res.status(500).send('Stream Tunnel Error');
+    res.status(502).send('Stream Tunnel Gateway Error');
   }
 }
 
-app.get('/api/stream-proxy', async (req, res) => {
+app.get(['/api/stream-proxy', '/api/proxy-stream'], async (req, res) => {
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
