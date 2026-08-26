@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y \
     libdbus-1-3 \
     libgdk-pixbuf2.0-0 \
     libglib2.0-0 \
-    libnspr4 \
     libpango-1.0-0 \
     libx11-6 \
     libx11-xcb1 \
@@ -36,7 +35,6 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Set environment variable for Puppeteer to use installed Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
