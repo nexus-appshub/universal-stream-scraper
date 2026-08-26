@@ -22,12 +22,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// মুভিবক্স সহ সকল সাপোর্টেড সার্ভার জেনারেটর
 const SERVER_GENERATORS = {
-  'moviebox': (t, id, s = 1, e = 1) => t === 'tv' ? `https://netfilm.world/spa/videoPlayPage/movies/tv-${id}?id=${id}&detailSe=${s}&detailEp=${e}&type=tv` : `https://netfilm.world/spa/videoPlayPage/movies/movie-${id}?id=${id}&type=movie`,
   'vidnest': (t, id, s = 1, e = 1) => t === 'tv' ? `https://vidnest.fun/tv/${id}/${s}/${e}` : `https://vidnest.fun/movie/${id}`,
   'vidrock': (t, id, s = 1, e = 1) => t === 'tv' ? `https://vidrock.net/tv/${id}/${s}/${e}` : `https://vidrock.net/movie/${id}`,
   'videasy': (t, id, s = 1, e = 1) => t === 'tv' ? `https://player.videasy.net/tv/${id}/${s}/${e}` : `https://player.videasy.net/movie/${id}`,
+  '1shows': (t, id, s = 1, e = 1) => t === 'tv' ? `https://1shows.app/tv/${id}/${s}/${e}` : `https://1shows.app/movie/${id}`,
   'vidlink': (t, id, s = 1, e = 1) => t === 'tv' ? `https://vidlink.pro/tv/${id}/${s}/${e}` : `https://vidlink.pro/movie/${id}`,
   'autoembed': (t, id, s = 1, e = 1) => t === 'tv' ? `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}` : `https://player.autoembed.cc/embed/movie/${id}`
 };
@@ -44,9 +43,10 @@ function isCandidateStreamUrl(url, contentType = '') {
   return (
     u.includes('.m3u8') || 
     u.includes('.mp4') || 
-    u.includes('gcogotv.com') ||
-    u.includes('hisavana.com') ||
     u.includes('workers.dev') ||
+    u.includes('gcogotv.com') ||
+    u.includes('vogttonight') ||
+    u.includes('chunk-stream') ||
     u.includes('playlist') ||
     contentType.includes('mpegurl') || 
     contentType.includes('video/')
@@ -104,7 +104,6 @@ async function extractStream(targetUrl) {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
     } catch (e) {}
 
-    // প্লে বাটন এবং ইন্টারেকশন ট্রিগার
     const frames = page.frames();
     for (const frame of frames) {
       try {
@@ -125,7 +124,7 @@ async function extractStream(targetUrl) {
     await browser.close();
 
     if (streamUrls.length > 0) {
-      const best = streamUrls.find(u => u.includes('master') || u.includes('.m3u8')) || streamUrls[0];
+      const best = streamUrls.find(u => u.includes('workers.dev') || u.includes('.m3u8')) || streamUrls[0];
       return best;
     }
     return null;
@@ -135,33 +134,77 @@ async function extractStream(targetUrl) {
   }
 }
 
-// প্রক্সি টানেল (HLS, DASH, ও অক্টেট সেগমেন্ট রিরাইটার)
+// স্মার্ট HLS/DASH ও বাফার প্রক্সি টানেল (Content-Type ও Data Inspector ফিক্স)
 app.get(['/api/proxy-stream', '/api/stream-proxy'], async (req, res) => {
   const streamUrl = req.query.url;
   if (!streamUrl) return res.status(400).send('URL required');
 
   try {
-    const customReferer = req.query.referer || 'https://vidnest.fun/';
-    const targetObj = new URL(streamUrl);
+    let cleanUrl = decodeURIComponent(streamUrl);
+    const customReferer = req.query.referer ? decodeURIComponent(req.query.referer) : 'https://vidnest.fun/';
+    let targetOrigin = 'https://vidnest.fun';
+    try { targetOrigin = new URL(cleanUrl).origin; } catch (e) {}
 
     const response = await axios({
       method: 'GET',
-      url: streamUrl,
-      responseType: streamUrl.includes('.m3u8') ? 'text' : 'stream',
+      url: cleanUrl,
+      responseType: 'arraybuffer', // সম্পূর্ণ ডাটা সরাসরি বাফার হিসেবে আনা হচ্ছে
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': customReferer,
-        'Origin': new URL(customReferer).origin,
+        'Origin': targetOrigin,
         ...(req.headers.range ? { 'Range': req.headers.range } : {})
       },
       timeout: 25000
     });
 
-    let contentType = response.headers['content-type'] || 'application/vnd.apple.mpegurl';
-    if (!streamUrl.includes('.m3u8')) {
-      if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
-        contentType = streamUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
-      }
+    const buffer = Buffer.from(response.data);
+    const textPreview = buffer.slice(0, 500).toString('utf8');
+
+    // রেসপন্সে #EXTM3U থাকলে নিশ্চিতভাবে এটি M3U8 প্লেলিস্ট
+    const isM3u8Content = textPreview.includes('#EXTM3U') || textPreview.includes('#EXT-X-');
+
+    if (isM3u8Content) {
+      const utf8Text = buffer.toString('utf8');
+      const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
+      const hostUrl = `${req.protocol}://${req.get('host')}`;
+
+      const rewritten = utf8Text.split('\n').map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return line;
+
+        // কী এবং সাব-ইউআরআই রিরাইট
+        if (trimmed.startsWith('#')) {
+          if (trimmed.includes('URI="')) {
+            return line.replace(/URI="([^"]+)"/g, (match, keyUrl) => {
+              let abs = keyUrl.startsWith('http') ? keyUrl : new URL(keyUrl, baseUrl).href;
+              return `URI="${hostUrl}/api/proxy-stream?url=${encodeURIComponent(abs)}&referer=${encodeURIComponent(customReferer)}"`;
+            });
+          }
+          return line;
+        }
+
+        // সেগমেন্ট লিঙ্ক রিরাইট
+        let chunk = trimmed;
+        if (!chunk.startsWith('http://') && !chunk.startsWith('https://')) {
+          chunk = chunk.startsWith('/') ? `${new URL(cleanUrl).origin}${chunk}` : `${baseUrl}${chunk}`;
+        }
+        return `${hostUrl}/api/proxy-stream?url=${encodeURIComponent(chunk)}&referer=${encodeURIComponent(customReferer)}`;
+      }).join('\n');
+
+      res.set({
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
+        'Cache-Control': 'no-cache, no-store',
+        'Content-Type': 'application/vnd.apple.mpegurl'
+      });
+      return res.send(rewritten);
+    }
+
+    // সাধারণ ভিডিও সেগমেন্ট (.ts / .mp4 / .m4s)
+    let contentType = response.headers['content-type'] || 'video/mp2t';
+    if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
+      contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
     }
 
     res.set({
@@ -171,29 +214,14 @@ app.get(['/api/proxy-stream', '/api/stream-proxy'], async (req, res) => {
       'Content-Type': contentType
     });
 
-    if (streamUrl.includes('.m3u8')) {
-      const baseUrl = streamUrl.substring(0, streamUrl.lastIndexOf('/') + 1);
-      const hostUrl = `${req.protocol}://${req.get('host')}`;
-      
-      const rewritten = response.data.split('\n').map(line => {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
-          let chunkUrl = trimmed.startsWith('http') ? trimmed : (trimmed.startsWith('/') ? `${targetObj.protocol}//${targetObj.host}${trimmed}` : `${baseUrl}${trimmed}`);
-          return `${hostUrl}/api/proxy-stream?url=${encodeURIComponent(chunkUrl)}&referer=${encodeURIComponent(customReferer)}`;
-        }
-        return line;
-      }).join('\n');
-
-      return res.send(rewritten);
-    }
-
-    response.data.pipe(res);
+    return res.send(buffer);
   } catch (err) {
-    res.status(502).send('Gateway Error');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.status(502).send('Stream Proxy Tunnel Error');
   }
 });
 
-// মেইন রেজলভার এন্ডপয়েন্ট
+// ইউনিভার্সাল রেজলভার এন্ডপয়েন্ট
 app.all(['/api/resolve-stream', '/api/v1/extract'], async (req, res) => {
   const p = req.method === 'POST' ? req.body : req.query;
   const tmdbId = p.id || p.tmdb_id;
@@ -209,7 +237,6 @@ app.all(['/api/resolve-stream', '/api/v1/extract'], async (req, res) => {
   let streamUrl = await extractStream(targetUrl);
   let actualServer = serverKey;
 
-  // ফলব্যাক চেইন
   if (!streamUrl) {
     const fallbacks = ['vidnest', 'vidrock', 'vidlink', 'autoembed'];
     for (const fb of fallbacks) {
@@ -243,7 +270,7 @@ app.all(['/api/resolve-stream', '/api/v1/extract'], async (req, res) => {
   return res.status(404).json({ success: false, error: 'Stream not found' });
 });
 
-app.get('/', (req, res) => res.send('🚀 MovieBox & Multi-Server Engine Online!'));
+app.get('/', (req, res) => res.send('🚀 High-Speed Unified Stream Engine Online!'));
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Engine live on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Engine listening on ${PORT}`));
