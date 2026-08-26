@@ -213,13 +213,21 @@ const ALLOWED_ORIGINS = [
   'https://homeairtv.xubilaswebdevcorp.shop',
   'https://anime.hmair.xyz',
   'https://hmair.xyz',
-  'https://www.hmair.xyz',
-  'https://2.0.hmair.xyz',
   'http://localhost:3000',
   'http://localhost:5173'
 ];
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.includes('xubilas') || origin.includes('hmair')) {
+      return callback(null, true);
+    }
+    return callback(new Error('Access Denied: Hotlinking Prohibited'));
+  },
+  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+  allowedHeaders: '*'
+}));
+
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -325,19 +333,19 @@ function getWebProviderUrls(params) {
   if (isTv) {
     return [
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
+      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
-      `https://vidlink.pro/tv/${id}/${season}/${episode}`
+      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
     ];
   }
 
   return [
     `https://vidnest.fun/movie/${id}`,
+    `https://player.autoembed.cc/embed/movie/${id}`,
     `https://vidsrc.sbs/embed/movie/${id}`,
     `https://vidrock.net/embed/movie/${id}`,
-    `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
-    `https://vidlink.pro/movie/${id}`
+    `https://vidsrc.xyz/embed/movie?tmdb=${id}`
   ];
 }
 
@@ -377,6 +385,7 @@ async function fastScrape(browser, targetUrl) {
     try {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 9000 });
 
+      // মাল্টি-লেয়ার ক্লিক ট্রিগার (যাতে কোনো এপিসোডের প্লে বাটন মিস না হয়)
       const triggerPlay = async () => {
         const frames = [page.mainFrame(), ...page.frames()];
         for (const frame of frames) {
@@ -392,7 +401,7 @@ async function fastScrape(browser, targetUrl) {
       };
 
       await triggerPlay();
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 1000));
       await triggerPlay();
 
     } catch (e) {}
@@ -403,7 +412,7 @@ async function fastScrape(browser, targetUrl) {
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 6000);
+    }, 5500);
   });
 }
 
@@ -579,10 +588,9 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  // Active Safe Fallback Embed (No dead autoembed.cc)
   const fallbackEmbed = params.isTv 
-    ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://vidsrc.sbs/embed/movie/${params.id}`;
+    ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
+    : `https://player.autoembed.cc/embed/movie/${params.id}`;
 
   return res.json({
     success: true,
@@ -647,7 +655,7 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
 });
 
 // ========================================================
-// ৭. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও লাইভ পাইপিং ফিক্স)
+// ৭. সেফ মিডিয়া টানেল প্রক্সি (ডাবল এনকোডিং ও লাইভ পাইপিং)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -675,7 +683,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       headers: {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
       timeout: 20000
     });
@@ -698,8 +706,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache'
+        'Access-Control-Allow-Origin': '*'
       });
       return res.send(rewritten);
     }
@@ -720,10 +727,12 @@ app.get('/api/stream-proxy', async (req, res) => {
   const refererHeader = req.headers['referer'] || req.headers['origin'] || '';
   const acceptHeader = req.headers['accept'] || '';
 
-  // শুধুমাত্র ব্রাউজারের অ্যাড্রেস বারে ডিরেক্ট লিংক পেস্ট করলে Access Denied পেজ আসবে
-  const isDirectBrowserDoc = acceptHeader.includes('text/html') && (!refererHeader || (!refererHeader.includes('hmair') && !refererHeader.includes('xubilas') && !refererHeader.includes('localhost')));
+  const isAuthorized = 
+    ALLOWED_ORIGINS.some(allowed => refererHeader.startsWith(allowed)) ||
+    refererHeader.includes('xubilas') ||
+    refererHeader.includes('hmair');
 
-  if (isDirectBrowserDoc) {
+  if (!isAuthorized && (acceptHeader.includes('text/html') || !refererHeader)) {
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(403).send(ACCESS_DENIED_HTML);
   }
@@ -733,7 +742,7 @@ app.get('/api/stream-proxy', async (req, res) => {
   return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
 });
 
-// ৮. MovieBox Native Play Endpoint (ইনস্ট্যান্ট অটো-স্ক্র্যাপ ফলব্যাক)
+// ৮. MovieBox Native Play Endpoint (ক্যাশ মিস হলে অটো-স্ক্র্যাপ সাপোর্ট)
 app.get('/api/moviebox/play', async (req, res) => {
   const params = parseParams(req.query);
   if (params.lang === 'dub') {
@@ -748,6 +757,7 @@ app.get('/api/moviebox/play', async (req, res) => {
     return pipeMediaTunnel(req, res, cached.url, cached.ref);
   }
 
+  // ক্যাশে না থাকলে ইনস্ট্যান্ট ব্যাকগ্রাউন্ড স্ক্র্যাপ
   try {
     const browser = await getWarmBrowser();
     const urls = getWebProviderUrls(params);
