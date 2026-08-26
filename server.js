@@ -69,10 +69,76 @@ const ALLOWED_ORIGINS = [
 const streamCache = new Map();
 
 app.get('/', (req, res) => {
-  res.send('Vidnest & MovieBox Scraper API is running smoothly.');
+  res.send('Multi-Provider Stream Scraper API is running smoothly.');
 });
 
-// ১. Vidnest Scraper (Smart Resolution Resolver & Proxy Support)
+// মাল্টি-প্রোভাইডার স্ক্র্যাপার ফাংশন
+async function scrapeStreamUrl(targetUrl, refererUrl) {
+  let browser = null;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1280,720'
+      ]
+    });
+
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({
+      'accept-language': 'en-US,en;q=0.9',
+      'referer': refererUrl
+    });
+    
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
+    let streamUrl = null;
+
+    page.on('response', async (response) => {
+      const url = response.url();
+      if (
+        url.includes('.m3u8') ||  
+        url.includes('master.m3u8') ||  
+        url.includes('/hls/') ||  
+        url.includes('playlist.m3u8')
+      ) {
+        streamUrl = url;
+      }
+    });
+
+    try {
+      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 12000 });
+    } catch (e) {}
+
+    try {
+      const frames = page.frames();
+      for (const frame of frames) {
+        try {
+          await frame.click('video, #play, .play-btn, .jw-display-icon-container, div[class*="play"]', { timeout: 1000 });
+        } catch (fErr) {}
+      }
+      await page.mouse.click(640, 360);
+    } catch (e) {}
+
+    let waitTime = 0;
+    while (!streamUrl && waitTime < 7000) {
+      await new Promise(r => setTimeout(r, 500));
+      waitTime += 500;
+    }
+
+    await browser.close();
+    return streamUrl;
+  } catch (error) {
+    if (browser) await browser.close();
+    return null;
+  }
+}
+
+// ১. Resolver API with Fallback Providers
 app.get('/api/resolve-stream', async (req, res) => {
   const { id, s = 1, e = 1, type = 'movie' } = req.query;
 
@@ -93,95 +159,45 @@ app.get('/api/resolve-stream', async (req, res) => {
     });
   }
 
-  const targetUrl = type === 'tv'  
-    ? `https://vidnest.fun/tv/${id}/${s}/${e}`  
-    : `https://vidnest.fun/movie/${id}`;
+  // প্রোভাইডার চেইন (Vidnest -> Autoembed -> VidLink)
+  const providers = type === 'tv' ? [
+    { url: `https://vidnest.fun/tv/${id}/${s}/${e}`, ref: 'https://vidnest.fun/' },
+    { url: `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}`, ref: 'https://autoembed.cc/' },
+    { url: `https://vidlink.pro/tv/${id}/${s}/${e}`, ref: 'https://vidlink.pro/' }
+  ] : [
+    { url: `https://vidnest.fun/movie/${id}`, ref: 'https://vidnest.fun/' },
+    { url: `https://player.autoembed.cc/embed/movie/${id}`, ref: 'https://autoembed.cc/' },
+    { url: `https://vidlink.pro/movie/${id}`, ref: 'https://vidlink.pro/' }
+  ];
 
-  let browser = null;
+  let foundUrl = null;
+  let activeRef = '';
 
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,720'
-      ]
-    });
-
-    const page = await browser.newPage();
-    
-    await page.setExtraHTTPHeaders({
-      'accept-language': 'en-US,en;q=0.9',
-      'referer': 'https://vidnest.fun/'
-    });
-    
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    );
-
-    let streamUrl = null;
-
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (
-        url.includes('.m3u8') ||  
-        url.includes('master.m3u8') ||  
-        url.includes('/hls/') ||  
-        url.includes('playlist.m3u8')
-      ) {
-        streamUrl = url;
-      }
-    });
-
-    try {
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 15000 });
-    } catch (e) {}
-
-    try {
-      const frames = page.frames();
-      for (const frame of frames) {
-        try {
-          await frame.click('video, #play, .play-btn, .jw-display-icon-container, div[class*="play"]', { timeout: 1500 });
-        } catch (fErr) {}
-      }
-      await page.mouse.click(640, 360);
-    } catch (e) {}
-
-    let waitTime = 0;
-    while (!streamUrl && waitTime < 10000) {
-      await new Promise(r => setTimeout(r, 500));
-      waitTime += 500;
+  for (const provider of providers) {
+    foundUrl = await scrapeStreamUrl(provider.url, provider.ref);
+    if (foundUrl) {
+      activeRef = provider.ref;
+      break;
     }
+  }
 
-    await browser.close();
-
-    if (streamUrl) {
-      // যদি মাস্টার প্লেলিস্ট হয়, তবে ভেতর থেকে বেস্ট রেজোলিউশন বা .m3u8 ফিল্টার করার লজিক
-      streamCache.set(cacheKey, { url: streamUrl, ref: targetUrl, time: Date.now() });
-      const hostUrl = `${req.protocol}://${req.get('host')}`;
-      return res.json({
-        success: true,
-        isEmbed: false,
-        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetUrl)}`,
-        rawUrl: streamUrl,
-        type
-      });
-    } else {
-      return res.status(404).json({ success: false, error: 'Direct stream link not captured.' });
-    }
-
-  } catch (error) {
-    if (browser) await browser.close();
-    return res.status(500).json({ success: false, error: error.message });
+  if (foundUrl) {
+    streamCache.set(cacheKey, { url: foundUrl, ref: activeRef, time: Date.now() });
+    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    return res.json({
+      success: true,
+      isEmbed: false,
+      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(foundUrl)}&referer=${encodeURIComponent(activeRef)}`,
+      rawUrl: foundUrl,
+      type
+    });
+  } else {
+    return res.status(404).json({ success: false, error: 'Direct stream link not captured from any provider.' });
   }
 });
 
 // ========================================================
-// আল্ট্রা-স্মুথ মিডিয়া টানেল প্রক্সি (Auto Resolution & Segment Parser)
+// সেফ মিডিয়া টানেল প্রক্সি (M3U8 Segments Rewriter)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
