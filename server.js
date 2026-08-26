@@ -48,7 +48,7 @@ const ACCESS_DENIED_HTML = `<!DOCTYPE html>
       </svg>
     </div>
     <h2>🚫 Access Denied ✋</h2>
-    <p>ভাই লিংক কপি করে লাভ নেই! দয়া করে অফিসিয়াল প্ল্যাটফর্মে স্ট্রিম করুন।</p>
+    <p>ভাই লিংক কপি করে লাভ নেই! দয়া করে অফিসিয়াল প্ল্যাটফর্মে স্ট্রিম করুন।</p>
     <a href="https://hmair.xyz" class="btn">Watch on Official Website</a>
     <a href="https://t.me/homeairtv" class="btn-tg" target="_blank" rel="noopener noreferrer">JOIN TG</a>
     <div class="footer-note">Protected by Stream Proxy Shield • 2026</div>
@@ -102,7 +102,6 @@ app.get('/api/resolve-stream', async (req, res) => {
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -181,7 +180,7 @@ app.get('/api/resolve-stream', async (req, res) => {
 });
 
 // ========================================================
-// সেফ মিডিয়া টানেল প্রক্সি (M3U8 Segments Rewriter)
+// ফিক্সড মাল্টি-স্ট্রিম মিডিয়া টানেল প্রক্সি (Video + Audio Sync)
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
@@ -218,19 +217,42 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
+        if (!trimmed) return line;
+
+        // সাব-স্ট্রিম বা URI অ্যাট্রিবিউট রিরাইট করা (মাল্টি-অডিও/ভিডিও ট্র্যাক ফিক্স)
+        if (trimmed.startsWith('#')) {
+          if (trimmed.includes('URI="')) {
+            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
+              try {
+                let absUrl = p1;
+                if (!absUrl.startsWith('http://') && !absUrl.startsWith('https://')) {
+                  absUrl = new URL(p1, baseUrl).href;
+                }
+                return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(ref)}"`;
+              } catch {
+                return match;
+              }
+            });
+          }
+          return line;
+        }
+
+        // সাধারণ সেগমেন্ট বা প্লেলিস্ট ইউআরএল প্রক্সির মাধ্যমে রুট করা
+        try {
           let segmentUrl = trimmed;
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
             segmentUrl = new URL(trimmed, baseUrl).href;
           }
           return `${proxyBase}?url=${encodeURIComponent(segmentUrl)}&referer=${encodeURIComponent(ref)}`;
+        } catch {
+          return line;
         }
-        return line;
       }).join('\n');
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*'
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache, no-store'
       });
       return res.send(rewritten);
     }
