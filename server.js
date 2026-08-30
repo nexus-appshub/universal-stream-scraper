@@ -136,18 +136,20 @@ function getWebProviderUrls(params) {
 
 async function fastScrape(browser, targetUrl) {
   const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
   await page.setRequestInterception(true);
   page.on('request', (req) => {
     const type = req.resourceType();
     const url = req.url();
-    if (['image', 'stylesheet', 'font', 'media'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
+    // ইমেজ, ফন্ট এবং সিএসএস ব্লক করি - কিন্তু স্ক্রিপ্ট ও মিডিয়া সচল রাখি
+    if (['image', 'font', 'stylesheet'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
       req.abort();
     } else {
       req.continue();
     }
   });
-
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
   return new Promise(async (resolve) => {
     let resolved = false;
@@ -165,20 +167,31 @@ async function fastScrape(browser, targetUrl) {
     });
 
     try {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
-      await page.evaluate(() => {
-        const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
-        if (btn) btn.click();
+      // পেজ লোড হওয়ার জন্য ১০ সেকেন্ড সময় দিই
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      
+      // প্লেয়ার রেন্ডার হওয়া পর্যন্ত লুপ করে সর্বোচ্চ ৪ সেকেন্ড অপেক্ষা ও ক্লিক করা
+      await page.evaluate(async () => {
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        for (let i = 0; i < 20; i++) {
+          const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
+          if (btn) {
+            btn.click();
+            break;
+          }
+          await sleep(200);
+        }
       });
     } catch (e) {}
 
+    // টোটাল স্ক্র্যাপার টাইমআউট বাড়িয়ে ১০ সেকেন্ড করা হলো
     setTimeout(async () => {
       if (!resolved) {
         resolved = true;
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 4500);
+    }, 10000);
   });
 }
 
@@ -252,7 +265,7 @@ async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsP
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 7000);
+    }, 10000);
   });
 }
 
