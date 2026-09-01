@@ -294,7 +294,7 @@ async function getAnikotoWatchUrl(title, episode = 1) {
 // ৩. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার (SUB, Movies, TV Series & Anime)
 // ========================================================
 async function getWebProviderUrls(params) {
-  const { id, isTv, season, episode, title } = params;
+  const { id, isTv, season, episode, title, lang } = params;
   const urls = [];
   const debugInfo = {
     anilistId: null,
@@ -310,8 +310,13 @@ async function getWebProviderUrls(params) {
       if (ext && ext.anilistId) {
         const ep = isTv ? episode : 1;
         // Priority anime streams from vidnest.fun (Anilist mapping)
-        urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
-        urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
+        if (lang === 'dub') {
+          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
+          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
+        } else {
+          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
+          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
+        }
       }
     } catch (e) {
       console.error("Error resolving AniList ID for vidnest anime url:", e);
