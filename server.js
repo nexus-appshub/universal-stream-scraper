@@ -409,11 +409,12 @@ async function fastScrape(browser, targetUrl) {
     });
 
     try {
-      // পেজ লোড হওয়ার জন্য ১০ সেকেন্ড সময় দিই
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      // পেজ লোড হওয়ার জন্য ৫ সেকেন্ড সময় দিই
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 5000 });
       
       // Multi-frame play button click trigger to support deep-nested player iframes (Anikoto, Vidnest, Megacloud, etc.)
       const clickPlayAcrossFrames = async () => {
+        if (resolved) return;
         const frames = page.frames();
         for (const frame of frames) {
           try {
@@ -436,22 +437,66 @@ async function fastScrape(browser, targetUrl) {
         }
       };
 
-      // Poll and click across frames every 400ms for 6 seconds
-      for (let i = 0; i < 15; i++) {
+      // Poll and click across frames every 400ms for 3.2 seconds
+      for (let i = 0; i < 8; i++) {
         if (resolved) break;
         await clickPlayAcrossFrames();
         await new Promise(r => setTimeout(r, 400));
       }
     } catch (e) {}
 
-    // টোটাল স্ক্র্যাপার টাইমআউট বাড়িয়ে ১০ সেকেন্ড করা হলো
+    // টোটাল স্ক্র্যাপার টাইমআউট কমিয়ে ৬ সেকেন্ড করা হলো
     setTimeout(async () => {
       if (!resolved) {
         resolved = true;
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 10000);
+    }, 6000);
+  });
+}
+
+// ৪. সমান্তরাল রেজোলিউশন রেসার (Parallel Resolution Racer)
+async function raceScrapeUrls(browser, urls) {
+  if (!browser || !urls || urls.length === 0) return null;
+  
+  const promises = urls.map(async (url) => {
+    try {
+      const streamUrl = await fastScrape(browser, url);
+      if (streamUrl) {
+        return { url: streamUrl, ref: url };
+      }
+    } catch (e) {
+      // ignore
+    }
+    return null;
+  });
+  
+  return new Promise((resolve) => {
+    let completed = 0;
+    let resolved = false;
+    
+    promises.forEach(async (p) => {
+      const res = await p;
+      if (res && res.url && !resolved) {
+        resolved = true;
+        resolve(res);
+      } else {
+        completed++;
+        if (completed === urls.length && !resolved) {
+          resolved = true;
+          resolve(null);
+        }
+      }
+    });
+    
+    // Safety fallback
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve(null);
+      }
+    }, 8500);
   });
 }
 
@@ -609,24 +654,22 @@ async function handleResolveStream(req, res) {
       const { urls, debugInfo, fetchAnimeUrlsFn, animeUrls } = await getWebProviderUrls(params);
       activeDebugInfo = debugInfo;
       
-      // ১. প্রারম্ভিক হাই-স্পিড ইউআরএল লিস্ট ট্রাই করি (মুভির ক্ষেত্রে ইনস্ট্যান্ট)
-      for (const url of urls) {
-        const streamUrl = await fastScrape(browser, url);
-        if (streamUrl) {
-          const data = { url: streamUrl, ref: url, time: Date.now() };
-          streamCache.set(cacheKey, data);
-          return data;
-        }
+      // ১. সমান্তরাল রেজোলিউশন রেসার (Parallel Resolution Racer) দিয়ে একসাথে সব লিংক স্ক্র্যাপ করি (ম্যাক্সিমাম স্পিড!)
+      const raceResult = await raceScrapeUrls(browser, urls);
+      if (raceResult && raceResult.url) {
+        const data = { url: raceResult.url, ref: raceResult.ref, time: Date.now() };
+        streamCache.set(cacheKey, data);
+        return data;
       }
 
       // ২. যদি কোনো স্ট্রিম না পাওয়া যায় এবং এটি এনিমে ডিক্লেয়ার করা না হয়ে থাকে, তবে এনিমে ফলব্যাক লোড করি
       if (!params.isAnime) {
         console.log("No regular stream found. Trying lazy anime fallback search...");
         await fetchAnimeUrlsFn();
-        for (const url of animeUrls) {
-          const streamUrl = await fastScrape(browser, url);
-          if (streamUrl) {
-            const data = { url: streamUrl, ref: url, time: Date.now() };
+        if (animeUrls && animeUrls.length > 0) {
+          const fallbackResult = await raceScrapeUrls(browser, animeUrls);
+          if (fallbackResult && fallbackResult.url) {
+            const data = { url: fallbackResult.url, ref: fallbackResult.ref, time: Date.now() };
             streamCache.set(cacheKey, data);
             return data;
           }
@@ -693,13 +736,10 @@ app.get('/api/v1/stream', async (req, res) => {
       acquired = true;
       const browser = await getWarmBrowser();
       const { urls } = await getWebProviderUrls(params);
-      for (const url of urls) {
-        const streamUrl = await fastScrape(browser, url);
-        if (streamUrl) {
-          targetStream = { url: streamUrl, ref: url, time: Date.now() };
-          streamCache.set(cacheKey, targetStream);
-          break;
-        }
+      const raceResult = await raceScrapeUrls(browser, urls);
+      if (raceResult && raceResult.url) {
+        targetStream = { url: raceResult.url, ref: raceResult.ref, time: Date.now() };
+        streamCache.set(cacheKey, targetStream);
       }
     } finally {
       if (acquired) {
@@ -815,6 +855,16 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     const ref = referer ? decodeURIComponent(referer) : domain;
     const proxyBase = `${getHostUrl(req)}/api/stream-proxy`;
 
+    // Extract and parse custom headers encoded in query parameter if present
+    let parsedHeaders = {};
+    if (targetUrlObj.searchParams.has('headers')) {
+      try {
+        parsedHeaders = JSON.parse(targetUrlObj.searchParams.get('headers'));
+      } catch (e) {
+        console.error("Error parsing headers parameter inside proxy:", e);
+      }
+    }
+
     // ক্রোম ব্রাউজার ট্যাবে সরাসরি লিঙ্ক খুললে অটো-প্লেয়ার প্রদান
     const acceptHeader = req.headers['accept'] || '';
     if (acceptHeader.includes('text/html') && !req.headers.range && !cleanUrl.includes('.ts')) {
@@ -862,6 +912,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
             'Referer': ref,
             'Origin': ref.replace(/\/$/, ''),
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            ...parsedHeaders,
             ...(req.headers.range ? { 'Range': req.headers.range } : {})
           },
           timeout: 25000
@@ -903,6 +954,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         'Referer': ref,
         'Origin': ref.replace(/\/$/, ''),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ...parsedHeaders,
         ...(req.headers.range ? { 'Range': req.headers.range } : {})
       },
       timeout: 25000
