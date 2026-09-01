@@ -12,6 +12,15 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.set('trust proxy', 1);
 
+function getHostUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  let host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
+  if (host.includes(',')) {
+    host = host.split(',')[0].trim();
+  }
+  return `${proto}://${host}`;
+}
+
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -532,7 +541,7 @@ function parseParams(query) {
 // ========================================================
 async function handleResolveStream(req, res) {
   const params = parseParams(req.query);
-  const hostUrl = `${req.protocol}://${req.get('host')}`;
+  const hostUrl = getHostUrl(req);
   let activeDebugInfo = null;
 
   if (params.lang === 'dub') {
@@ -646,7 +655,7 @@ app.get(['/api/resolve-stream', '/api/v1/extract'], handleResolveStream);
 // ডাইরেক্ট স্ট্রিম রিডাইরেক্ট রাউট
 app.get('/api/v1/stream', async (req, res) => {
   const params = parseParams(req.query);
-  const hostUrl = `${req.protocol}://${req.get('host')}`;
+  const hostUrl = getHostUrl(req);
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
   
   let targetStream = streamCache.get(cacheKey);
@@ -683,7 +692,7 @@ app.get('/api/v1/stream', async (req, res) => {
 // ========================================================
 app.get('/api/vidsrc/scrape', async (req, res) => {
   const params = parseParams(req.query);
-  const hostUrl = `${req.protocol}://${req.get('host')}`;
+  const hostUrl = getHostUrl(req);
   const cacheKey = `vidsrc_${params.id}_${params.typeStr}_${params.season}_${params.episode}_${params.server}`;
 
   const cached = streamCache.get(cacheKey);
@@ -777,9 +786,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     const targetUrlObj = new URL(cleanUrl);
     const domain = targetUrlObj.origin;
     const ref = referer ? decodeURIComponent(referer) : domain;
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-    const host = req.get('host');
-    const proxyBase = `${protocol}://${host}/api/stream-proxy`;
+    const proxyBase = `${getHostUrl(req)}/api/stream-proxy`;
 
     // ক্রোম ব্রাউজার ট্যাবে সরাসরি লিঙ্ক খুললে অটো-প্লেয়ার প্রদান
     const acceptHeader = req.headers['accept'] || '';
