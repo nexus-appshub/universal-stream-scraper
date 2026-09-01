@@ -4,6 +4,9 @@
   "description": "Universal Media Stream Scraper Engine",
   "main": "server.js",
   "scripts": {
+    "dev": "node server.js",
+    "build": "echo 'No build step required'",
+    "lint": "echo 'No lint step required'",
     "start": "node server.js"
   },
   "dependencies": {

@@ -30,14 +30,47 @@ const CACHE_TTL = 24 * 60 * 60 * 1000;
 const pendingScrapes = new Map();
 
 let globalBrowser = null;
+let currentProfileDir = null;
+
+// Concurrency Control to prevent Out Of Memory on 1GB RAM instances
+let activeScrapesCount = 0;
+const MAX_CONCURRENT_SCRAPES = 1; // 1 tab at a time ensures Chromium fits comfortably in low-memory containers
+const scrapeQueue = [];
+
+function acquireScrapeSlot() {
+  if (activeScrapesCount < MAX_CONCURRENT_SCRAPES) {
+    activeScrapesCount++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    scrapeQueue.push(resolve);
+  });
+}
+
+function releaseScrapeSlot() {
+  activeScrapesCount--;
+  if (scrapeQueue.length > 0) {
+    const next = scrapeQueue.shift();
+    activeScrapesCount++;
+    next();
+  }
+}
 
 async function getWarmBrowser() {
   if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-profile-'));
+
+  // Clean up any old profile directory to free disk/memory space
+  if (currentProfileDir) {
+    try {
+      fs.rmSync(currentProfileDir, { recursive: true, force: true });
+    } catch (e) {}
+  }
+
+  currentProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-profile-'));
   globalBrowser = await puppeteer.launch({
     headless: 'new',
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-    userDataDir: tempDir,
+    userDataDir: currentProfileDir,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -47,7 +80,9 @@ async function getWarmBrowser() {
       '--single-process',
       '--disable-extensions',
       '--blink-settings=imagesEnabled=false',
-      '--disable-remote-fonts'
+      '--disable-remote-fonts',
+      '--disable-features=IsolateOrigins,site-per-process', // Disable process site isolation to save ~70% Chromium RAM
+      '--js-flags="--max-old-space-size=128"' // Limit JS VM heap memory in browser pages to 128MB
     ]
   });
   return globalBrowser;
@@ -135,6 +170,7 @@ function getWebProviderUrls(params) {
 }
 
 async function fastScrape(browser, targetUrl) {
+  if (!browser) return null;
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 720 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
@@ -199,6 +235,7 @@ async function fastScrape(browser, targetUrl) {
 // ৩. VIDSRC.SBS DEEP MULTI-LANG SCRAPER
 // ========================================================
 async function scrapeVidSrcMultiLang(browser, targetUrl, preferredServer = 'AwsPly') {
+  if (!browser) return null;
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 720 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
@@ -338,7 +375,10 @@ async function handleResolveStream(req, res) {
   }
 
   const scrapeTask = (async () => {
+    let acquired = false;
     try {
+      await acquireScrapeSlot();
+      acquired = true;
       const browser = await getWarmBrowser();
       const urls = getWebProviderUrls(params);
       for (const url of urls) {
@@ -353,6 +393,9 @@ async function handleResolveStream(req, res) {
     } catch (err) {
       return null;
     } finally {
+      if (acquired) {
+        releaseScrapeSlot();
+      }
       pendingScrapes.delete(cacheKey);
     }
   })();
@@ -397,14 +440,23 @@ app.get('/api/v1/stream', async (req, res) => {
   
   let targetStream = streamCache.get(cacheKey);
   if (!targetStream) {
-    const browser = await getWarmBrowser();
-    const urls = getWebProviderUrls(params);
-    for (const url of urls) {
-      const streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        targetStream = { url: streamUrl, ref: url, time: Date.now() };
-        streamCache.set(cacheKey, targetStream);
-        break;
+    let acquired = false;
+    try {
+      await acquireScrapeSlot();
+      acquired = true;
+      const browser = await getWarmBrowser();
+      const urls = getWebProviderUrls(params);
+      for (const url of urls) {
+        const streamUrl = await fastScrape(browser, url);
+        if (streamUrl) {
+          targetStream = { url: streamUrl, ref: url, time: Date.now() };
+          streamCache.set(cacheKey, targetStream);
+          break;
+        }
+      }
+    } finally {
+      if (acquired) {
+        releaseScrapeSlot();
       }
     }
   }
@@ -436,12 +488,22 @@ app.get('/api/vidsrc/scrape', async (req, res) => {
   }
 
   try {
-    const browser = await getWarmBrowser();
+    let streamUrl = null;
+    let acquired = false;
     const targetUrl = params.isTv
       ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
       : `https://vidsrc.sbs/embed/movie/${params.id}`;
 
-    const streamUrl = await scrapeVidSrcMultiLang(browser, targetUrl, params.server);
+    try {
+      await acquireScrapeSlot();
+      acquired = true;
+      const browser = await getWarmBrowser();
+      streamUrl = await scrapeVidSrcMultiLang(browser, targetUrl, params.server);
+    } finally {
+      if (acquired) {
+        releaseScrapeSlot();
+      }
+    }
 
     if (streamUrl) {
       streamCache.set(cacheKey, { url: streamUrl, ref: targetUrl, time: Date.now() });
@@ -542,6 +604,52 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       return res.send(htmlPlayer);
     }
 
+    const isM3u8Url = cleanUrl.toLowerCase().includes('.m3u8') || cleanUrl.toLowerCase().includes('playlist');
+
+    if (!isM3u8Url) {
+      // Direct binary streaming bypass to prevent memory bloating / Out Of Memory
+      try {
+        const response = await axios({
+          method: 'GET',
+          url: cleanUrl,
+          responseType: 'stream',
+          headers: {
+            'Referer': ref,
+            'Origin': ref.replace(/\/$/, ''),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            ...(req.headers.range ? { 'Range': req.headers.range } : {})
+          },
+          timeout: 25000
+        });
+
+        let contentType = response.headers['content-type'] || 'video/mp2t';
+        if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
+          contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
+        }
+
+        res.set({
+          'Content-Type': contentType,
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': '*',
+          'Accept-Ranges': 'bytes',
+          ...(response.headers['content-range'] ? { 'Content-Range': response.headers['content-range'] } : {}),
+          ...(response.headers['content-length'] ? { 'Content-Length': response.headers['content-length'] } : {})
+        });
+
+        if (response.status) {
+          res.status(response.status);
+        }
+
+        response.data.pipe(res);
+        response.data.on('error', () => {
+          res.end();
+        });
+        return;
+      } catch (streamErr) {
+        return res.status(502).send('Stream Tunnel Gateway Error');
+      }
+    }
+
     const response = await axios({
       method: 'GET',
       url: cleanUrl,
@@ -618,5 +726,5 @@ app.get(['/api/stream-proxy', '/api/proxy-stream'], async (req, res) => {
 
 app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online!'));
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 Active on ${PORT}`));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Active on ${PORT}`));
