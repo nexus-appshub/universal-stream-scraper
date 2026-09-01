@@ -303,28 +303,48 @@ async function getAnikotoWatchUrl(title, episode = 1) {
 // ৩. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার (SUB, Movies, TV Series & Anime)
 // ========================================================
 async function getWebProviderUrls(params) {
-  const { id, isTv, season, episode, title, lang } = params;
-  const urls = [];
+  const { id, isTv, season, episode, title, lang, isAnime } = params;
+  const regularUrls = [];
+  const animeUrls = [];
   const debugInfo = {
     anilistId: null,
     anikotoUrl: null,
     urlsTried: []
   };
 
-  // If there's a title, resolve AniList ID to scrape anime endpoints on vidnest.fun
-  if (title) {
+  // Build regular TV/Movie URLs (instant)
+  if (isTv) {
+    regularUrls.push(
+      `https://vidnest.fun/tv/${id}/${season}/${episode}`,
+      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
+      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
+      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
+    );
+  } else {
+    regularUrls.push(
+      `https://vidnest.fun/movie/${id}`,
+      `https://player.autoembed.cc/embed/movie/${id}`,
+      `https://vidsrc.sbs/embed/movie/${id}`,
+      `https://vidrock.net/embed/movie/${id}`,
+      `https://vidsrc.xyz/embed/movie?tmdb=${id}`
+    );
+  }
+
+  // If the user explicitly requested Anime OR we want to build anime URLs:
+  const fetchAnimeUrls = async () => {
+    if (!title) return;
     try {
       const ext = await getAnimeExternalIds(title);
       debugInfo.anilistId = ext?.anilistId || null;
       if (ext && ext.anilistId) {
         const ep = isTv ? episode : 1;
-        // Priority anime streams from vidnest.fun (Anilist mapping)
         if (lang === 'dub') {
-          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
-          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
+          animeUrls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
+          animeUrls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
         } else {
-          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
-          urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
+          animeUrls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
+          animeUrls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
         }
       }
     } catch (e) {
@@ -336,34 +356,23 @@ async function getWebProviderUrls(params) {
       const anikotoUrl = await getAnikotoWatchUrl(title, ep);
       debugInfo.anikotoUrl = anikotoUrl;
       if (anikotoUrl) {
-        // Priority anime stream from anikoto
-        urls.push(anikotoUrl);
+        animeUrls.push(anikotoUrl);
       }
     } catch (e) {
       console.error("Error fetching Anikoto watch url:", e);
     }
-  }
+  };
 
-  if (isTv) {
-    urls.push(
-      `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
-    );
+  if (isAnime) {
+    await fetchAnimeUrls();
+    const urls = [...animeUrls, ...regularUrls];
+    debugInfo.urlsTried = urls;
+    return { urls, debugInfo, fetchAnimeUrlsFn: fetchAnimeUrls, regularUrls, animeUrls };
   } else {
-    urls.push(
-      `https://vidnest.fun/movie/${id}`,
-      `https://player.autoembed.cc/embed/movie/${id}`,
-      `https://vidsrc.sbs/embed/movie/${id}`,
-      `https://vidrock.net/embed/movie/${id}`,
-      `https://vidsrc.xyz/embed/movie?tmdb=${id}`
-    );
+    const urls = [...regularUrls];
+    debugInfo.urlsTried = urls;
+    return { urls, debugInfo, fetchAnimeUrlsFn: fetchAnimeUrls, regularUrls, animeUrls };
   }
-
-  debugInfo.urlsTried = urls;
-  return { urls, debugInfo };
 }
 
 async function fastScrape(browser, targetUrl) {
@@ -532,8 +541,9 @@ function parseParams(query) {
   const malId = query.mal_id || query.malId;
   const anilistId = query.anilist_id || query.anilistId;
   const server = query.server || 'AwsPly';
+  const isAnime = typeStr === 'anime' || query.isAnime === 'true' || query.is_anime === 'true' || query.genre === 'anime' || query.genre === 'animation';
 
-  return { id: targetId, typeStr, isTv, season, episode, lang, malId, anilistId, title, server };
+  return { id: targetId, typeStr, isTv, season, episode, lang, malId, anilistId, title, server, isAnime };
 }
 
 // ========================================================
@@ -596,8 +606,10 @@ async function handleResolveStream(req, res) {
       await acquireScrapeSlot();
       acquired = true;
       const browser = await getWarmBrowser();
-      const { urls, debugInfo } = await getWebProviderUrls(params);
+      const { urls, debugInfo, fetchAnimeUrlsFn, animeUrls } = await getWebProviderUrls(params);
       activeDebugInfo = debugInfo;
+      
+      // ১. প্রারম্ভিক হাই-স্পিড ইউআরএল লিস্ট ট্রাই করি (মুভির ক্ষেত্রে ইনস্ট্যান্ট)
       for (const url of urls) {
         const streamUrl = await fastScrape(browser, url);
         if (streamUrl) {
@@ -606,6 +618,21 @@ async function handleResolveStream(req, res) {
           return data;
         }
       }
+
+      // ২. যদি কোনো স্ট্রিম না পাওয়া যায় এবং এটি এনিমে ডিক্লেয়ার করা না হয়ে থাকে, তবে এনিমে ফলব্যাক লোড করি
+      if (!params.isAnime) {
+        console.log("No regular stream found. Trying lazy anime fallback search...");
+        await fetchAnimeUrlsFn();
+        for (const url of animeUrls) {
+          const streamUrl = await fastScrape(browser, url);
+          if (streamUrl) {
+            const data = { url: streamUrl, ref: url, time: Date.now() };
+            streamCache.set(cacheKey, data);
+            return data;
+          }
+        }
+      }
+
       return null;
     } catch (err) {
       activeDebugInfo = { error: err.message, stack: err.stack };
@@ -665,7 +692,7 @@ app.get('/api/v1/stream', async (req, res) => {
       await acquireScrapeSlot();
       acquired = true;
       const browser = await getWarmBrowser();
-      const urls = await getWebProviderUrls(params);
+      const { urls } = await getWebProviderUrls(params);
       for (const url of urls) {
         const streamUrl = await fastScrape(browser, url);
         if (streamUrl) {
