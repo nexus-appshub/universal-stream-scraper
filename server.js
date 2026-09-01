@@ -56,6 +56,40 @@ function releaseScrapeSlot() {
   }
 }
 
+function getChromiumPath() {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    return process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+  const defaultPath = '/root/.cache/puppeteer/chrome/linux-127.0.6533.88/chrome-linux64/chrome';
+  if (fs.existsSync(defaultPath)) {
+    return defaultPath;
+  }
+  try {
+    const rootCache = '/root/.cache/puppeteer';
+    if (fs.existsSync(rootCache)) {
+      const globFiles = (dir) => {
+        let results = [];
+        const list = fs.readdirSync(dir);
+        list.forEach((file) => {
+          const filePath = path.join(dir, file);
+          const stat = fs.statSync(filePath);
+          if (stat && stat.isDirectory()) {
+            results = results.concat(globFiles(filePath));
+          } else {
+            if (path.basename(filePath) === 'chrome' || path.basename(filePath) === 'chromium') {
+              results.push(filePath);
+            }
+          }
+        });
+        return results;
+      };
+      const found = globFiles(rootCache);
+      if (found.length > 0) return found[0];
+    }
+  } catch (e) {}
+  return '/usr/bin/chromium';
+}
+
 async function getWarmBrowser() {
   if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
 
@@ -69,7 +103,7 @@ async function getWarmBrowser() {
   currentProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puppeteer-profile-'));
   globalBrowser = await puppeteer.launch({
     headless: 'new',
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+    executablePath: getChromiumPath(),
     userDataDir: currentProfileDir,
     args: [
       '--no-sandbox',
@@ -94,26 +128,47 @@ getWarmBrowser().catch(() => {});
 // ১. DUB এর জন্য MAL / ANILIST / MEGAPLAY রেজলভার
 // ========================================================
 async function getAnimeExternalIds(title = '') {
-  try {
-    const query = `
-      query ($search: String) {
-        Media (search: $search, type: ANIME) {
-          id
-          idMal
-        }
+  const query = `
+    query ($search: String) {
+      Media (search: $search, type: ANIME) {
+        id
+        idMal
       }
-    `;
-    const cleanTitle = title.replace(/[^\w\s]/gi, '');
-    if (cleanTitle) {
+    }
+  `;
+  const cleanTitle = title.trim();
+  if (!cleanTitle) return { malId: null, anilistId: null };
+
+  const tryAniList = async (searchTerm) => {
+    try {
       const res = await axios.post('https://graphql.anilist.co', {
         query,
-        variables: { search: cleanTitle }
+        variables: { search: searchTerm }
       }, { timeout: 4000 });
-
-      const media = res.data?.data?.Media;
-      if (media) return { malId: media.idMal, anilistId: media.id };
+      return res.data?.data?.Media;
+    } catch (e) {
+      return null;
     }
-  } catch (e) {}
+  };
+
+  // 1. Try with full title
+  let media = await tryAniList(cleanTitle);
+  if (media) return { malId: media.idMal, anilistId: media.id };
+
+  // 2. Try with first 2 words if title has multiple words
+  const words = cleanTitle.split(/\s+/);
+  if (words.length > 2) {
+    const fallbackTitle = words.slice(0, 2).join(' ');
+    media = await tryAniList(fallbackTitle);
+    if (media) return { malId: media.idMal, anilistId: media.id };
+  }
+
+  // 3. Try with first word
+  if (words.length > 0) {
+    media = await tryAniList(words[0]);
+    if (media) return { malId: media.idMal, anilistId: media.id };
+  }
+
   return { malId: null, anilistId: null };
 }
 
@@ -145,28 +200,156 @@ async function resolveDubStream(params) {
 }
 
 // ========================================================
-// ২. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার (SUB, Movies, TV Series)
+// ২. ANIKOTO (anikoto.cz) ওয়াচ পেজ রেজলভার
 // ========================================================
-function getWebProviderUrls(params) {
-  const { id, isTv, season, episode } = params;
+async function getAnikotoWatchUrl(title, episode = 1) {
+  try {
+    const cleanTitle = title.trim();
+    const tryAnikotoSearch = async (term) => {
+      let combinedHtml = '';
+      try {
+        const suggestUrl = `https://anikoto.cz/ajax/search/suggest?keyword=${encodeURIComponent(term)}`;
+        const suggestRes = await axios.get(suggestUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          timeout: 4000
+        });
+        if (suggestRes && suggestRes.data) {
+          if (typeof suggestRes.data === 'string') {
+            combinedHtml += suggestRes.data;
+          } else if (suggestRes.data.html) {
+            combinedHtml += suggestRes.data.html;
+          } else {
+            combinedHtml += JSON.stringify(suggestRes.data);
+          }
+        }
+      } catch (e) {}
+
+      try {
+        const filterUrl = `https://anikoto.cz/filter?keyword=${encodeURIComponent(term)}`;
+        const filterRes = await axios.get(filterUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+          },
+          timeout: 4000
+        });
+        if (filterRes && filterRes.data) {
+          combinedHtml += filterRes.data;
+        }
+      } catch (e) {}
+
+      return combinedHtml;
+    };
+
+    // 1. Try full title first
+    let html = await tryAnikotoSearch(cleanTitle);
+
+    // 2. If no /watch/ slug in results, try first 2 words
+    const words = cleanTitle.split(/\s+/);
+    if ((!html || !html.includes('/watch/')) && words.length > 2) {
+      const fallbackTerm = words.slice(0, 2).join(' ');
+      html = await tryAnikotoSearch(fallbackTerm);
+    }
+
+    // 3. If still no watch slug, try first word
+    if ((!html || !html.includes('/watch/')) && words.length > 0) {
+      html = await tryAnikotoSearch(words[0]);
+    }
+
+    // Extract matching /watch/{anime-slug} patterns
+    const regex = /\/watch\/([a-zA-Z0-9-]+)/g;
+    let match;
+    const slugs = [];
+    while ((match = regex.exec(html)) !== null) {
+      const slug = match[1];
+      if (slug && !slugs.includes(slug) && slug !== 'ep') {
+        slugs.push(slug);
+      }
+    }
+
+    if (slugs.length > 0) {
+      // Find the best matching slug
+      const searchNorm = cleanTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+      let bestSlug = slugs[0];
+      for (const slug of slugs) {
+        const slugNorm = slug.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (slugNorm.includes(searchNorm) || searchNorm.includes(slugNorm)) {
+          bestSlug = slug;
+          break;
+        }
+      }
+      return `https://anikoto.cz/watch/${bestSlug}/ep-${episode}`;
+    }
+  } catch (err) {
+    console.error("Anikoto resolver error:", err.message);
+  }
+  return null;
+}
+
+// ========================================================
+// ৩. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার (SUB, Movies, TV Series & Anime)
+// ========================================================
+async function getWebProviderUrls(params) {
+  const { id, isTv, season, episode, title } = params;
+  const urls = [];
+  const debugInfo = {
+    anilistId: null,
+    anikotoUrl: null,
+    urlsTried: []
+  };
+
+  // If there's a title, resolve AniList ID to scrape anime endpoints on vidnest.fun
+  if (title) {
+    try {
+      const ext = await getAnimeExternalIds(title);
+      debugInfo.anilistId = ext?.anilistId || null;
+      if (ext && ext.anilistId) {
+        const ep = isTv ? episode : 1;
+        // Priority anime streams from vidnest.fun (Anilist mapping)
+        urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/sub`);
+        urls.push(`https://vidnest.fun/anime/${ext.anilistId}/${ep}/dub`);
+      }
+    } catch (e) {
+      console.error("Error resolving AniList ID for vidnest anime url:", e);
+    }
+
+    try {
+      const ep = isTv ? episode : 1;
+      const anikotoUrl = await getAnikotoWatchUrl(title, ep);
+      debugInfo.anikotoUrl = anikotoUrl;
+      if (anikotoUrl) {
+        // Priority anime stream from anikoto
+        urls.push(anikotoUrl);
+      }
+    } catch (e) {
+      console.error("Error fetching Anikoto watch url:", e);
+    }
+  }
 
   if (isTv) {
-    return [
+    urls.push(
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
       `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
       `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
-    ];
+    );
+  } else {
+    urls.push(
+      `https://vidnest.fun/movie/${id}`,
+      `https://player.autoembed.cc/embed/movie/${id}`,
+      `https://vidsrc.sbs/embed/movie/${id}`,
+      `https://vidrock.net/embed/movie/${id}`,
+      `https://vidsrc.xyz/embed/movie?tmdb=${id}`
+    );
   }
 
-  return [
-    `https://vidnest.fun/movie/${id}`,
-    `https://player.autoembed.cc/embed/movie/${id}`,
-    `https://vidsrc.sbs/embed/movie/${id}`,
-    `https://vidrock.net/embed/movie/${id}`,
-    `https://vidsrc.xyz/embed/movie?tmdb=${id}`
-  ];
+  debugInfo.urlsTried = urls;
+  return { urls, debugInfo };
 }
 
 async function fastScrape(browser, targetUrl) {
@@ -179,8 +362,8 @@ async function fastScrape(browser, targetUrl) {
   page.on('request', (req) => {
     const type = req.resourceType();
     const url = req.url();
-    // ইমেজ, ফন্ট এবং সিএসএস ব্লক করি - কিন্তু স্ক্রিপ্ট ও মিডিয়া সচল রাখি
-    if (['image', 'font', 'stylesheet'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
+    // ইমেজ এবং ফন্ট ব্লক করি - কিন্তু সিএসএস, স্ক্রিপ্ট ও মিডিয়া সচল রাখি
+    if (['image', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
       req.abort();
     } else {
       req.continue();
@@ -206,18 +389,36 @@ async function fastScrape(browser, targetUrl) {
       // পেজ লোড হওয়ার জন্য ১০ সেকেন্ড সময় দিই
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
       
-      // প্লেয়ার রেন্ডার হওয়া পর্যন্ত লুপ করে সর্বোচ্চ ৪ সেকেন্ড অপেক্ষা ও ক্লিক করা
-      await page.evaluate(async () => {
-        const sleep = ms => new Promise(r => setTimeout(r, ms));
-        for (let i = 0; i < 20; i++) {
-          const btn = document.querySelector('video, button, #play, .play-btn, .jw-display-icon-container, .vjs-big-play-button');
-          if (btn) {
-            btn.click();
-            break;
-          }
-          await sleep(200);
+      // Multi-frame play button click trigger to support deep-nested player iframes (Anikoto, Vidnest, Megacloud, etc.)
+      const clickPlayAcrossFrames = async () => {
+        const frames = page.frames();
+        for (const frame of frames) {
+          try {
+            await frame.evaluate(() => {
+              const selectors = [
+                'video', 'button', '#play', '.play-btn', '.jw-display-icon-container', 
+                '.vjs-big-play-button', '.play-icon', '#player', '.iframe-player',
+                '.play_btn', '.playButton', '.play-button', '[aria-label="Play"]',
+                '.play', '.clickable', '.plyr__control--overlaid'
+              ];
+              for (const selector of selectors) {
+                const el = document.querySelector(selector);
+                if (el) {
+                  el.click();
+                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                }
+              }
+            });
+          } catch (e) {}
         }
-      });
+      };
+
+      // Poll and click across frames every 400ms for 6 seconds
+      for (let i = 0; i < 15; i++) {
+        if (resolved) break;
+        await clickPlayAcrossFrames();
+        await new Promise(r => setTimeout(r, 400));
+      }
     } catch (e) {}
 
     // টোটাল স্ক্র্যাপার টাইমআউট বাড়িয়ে ১০ সেকেন্ড করা হলো
@@ -327,6 +528,7 @@ function parseParams(query) {
 async function handleResolveStream(req, res) {
   const params = parseParams(req.query);
   const hostUrl = `${req.protocol}://${req.get('host')}`;
+  let activeDebugInfo = null;
 
   if (params.lang === 'dub') {
     const dubEmbed = await resolveDubStream(params);
@@ -380,7 +582,8 @@ async function handleResolveStream(req, res) {
       await acquireScrapeSlot();
       acquired = true;
       const browser = await getWarmBrowser();
-      const urls = getWebProviderUrls(params);
+      const { urls, debugInfo } = await getWebProviderUrls(params);
+      activeDebugInfo = debugInfo;
       for (const url of urls) {
         const streamUrl = await fastScrape(browser, url);
         if (streamUrl) {
@@ -391,6 +594,7 @@ async function handleResolveStream(req, res) {
       }
       return null;
     } catch (err) {
+      activeDebugInfo = { error: err.message, stack: err.stack };
       return null;
     } finally {
       if (acquired) {
@@ -411,7 +615,8 @@ async function handleResolveStream(req, res) {
       rawUrl: finalResult.url,
       proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
       stream_url: finalResult.url,
-      type: params.typeStr
+      type: params.typeStr,
+      debugInfo: activeDebugInfo
     });
   }
 
@@ -426,7 +631,8 @@ async function handleResolveStream(req, res) {
     embedUrl: fallbackEmbed,
     proxy_stream_url: fallbackEmbed,
     stream_url: fallbackEmbed,
-    type: params.typeStr
+    type: params.typeStr,
+    debugInfo: activeDebugInfo
   });
 }
 
@@ -445,7 +651,7 @@ app.get('/api/v1/stream', async (req, res) => {
       await acquireScrapeSlot();
       acquired = true;
       const browser = await getWarmBrowser();
-      const urls = getWebProviderUrls(params);
+      const urls = await getWebProviderUrls(params);
       for (const url of urls) {
         const streamUrl = await fastScrape(browser, url);
         if (streamUrl) {
