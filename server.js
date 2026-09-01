@@ -375,46 +375,73 @@ async function getWebProviderUrls(params) {
   }
 }
 
-async function fastScrape(browser, targetUrl) {
+async function fastScrape(browser, targetUrl, sharedState) {
   if (!browser) return null;
+  if (sharedState && sharedState.resolved) return null;
+
   const page = await browser.newPage();
+  if (sharedState) {
+    sharedState.pages = sharedState.pages || [];
+    sharedState.pages.push(page);
+  }
+
   await page.setViewport({ width: 1280, height: 720 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
   await page.setRequestInterception(true);
   page.on('request', (req) => {
+    if (sharedState && sharedState.resolved) {
+      req.abort().catch(() => {});
+      return;
+    }
     const type = req.resourceType();
     const url = req.url();
     // ইমেজ এবং ফন্ট ব্লক করি - কিন্তু সিএসএস, স্ক্রিপ্ট ও মিডিয়া সচল রাখি
     if (['image', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
-      req.abort();
+      req.abort().catch(() => {});
     } else {
-      req.continue();
+      req.continue().catch(() => {});
     }
   });
 
   return new Promise(async (resolve) => {
-    let resolved = false;
+    let localResolved = false;
 
     page.on('response', async (response) => {
+      if (sharedState && sharedState.resolved) {
+        if (!localResolved) {
+          localResolved = true;
+          await page.close().catch(() => {});
+          resolve(null);
+        }
+        return;
+      }
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
       const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
 
-      if (isMedia && !isFake && !resolved) {
-        resolved = true;
+      if (isMedia && !isFake && !localResolved) {
+        localResolved = true;
+        if (sharedState) {
+          sharedState.resolved = true;
+        }
         await page.close().catch(() => {});
         resolve(u);
       }
     });
 
     try {
+      if (sharedState && sharedState.resolved) {
+        localResolved = true;
+        await page.close().catch(() => {});
+        return resolve(null);
+      }
       // পেজ লোড হওয়ার জন্য ৫ সেকেন্ড সময় দিই
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 5000 });
       
       // Multi-frame play button click trigger to support deep-nested player iframes (Anikoto, Vidnest, Megacloud, etc.)
       const clickPlayAcrossFrames = async () => {
-        if (resolved) return;
+        if (localResolved || (sharedState && sharedState.resolved)) return;
         const frames = page.frames();
         for (const frame of frames) {
           try {
@@ -439,20 +466,20 @@ async function fastScrape(browser, targetUrl) {
 
       // Poll and click across frames every 400ms for 3.2 seconds
       for (let i = 0; i < 8; i++) {
-        if (resolved) break;
+        if (localResolved || (sharedState && sharedState.resolved)) break;
         await clickPlayAcrossFrames();
         await new Promise(r => setTimeout(r, 400));
       }
     } catch (e) {}
 
-    // টোটাল স্ক্র্যাপার টাইমআউট কমিয়ে ৬ সেকেন্ড করা হলো
+    // টোটাল স্ক্র্যাপার টাইমআউট ৫ সেকেন্ড করা হলো
     setTimeout(async () => {
-      if (!resolved) {
-        resolved = true;
+      if (!localResolved) {
+        localResolved = true;
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 6000);
+    }, 5500);
   });
 }
 
@@ -460,44 +487,135 @@ async function fastScrape(browser, targetUrl) {
 async function raceScrapeUrls(browser, urls) {
   if (!browser || !urls || urls.length === 0) return null;
   
-  const promises = urls.map(async (url) => {
-    try {
-      const streamUrl = await fastScrape(browser, url);
-      if (streamUrl) {
-        return { url: streamUrl, ref: url };
-      }
-    } catch (e) {
-      // ignore
-    }
-    return null;
-  });
+  const sharedState = { resolved: false, pages: [] };
   
-  return new Promise((resolve) => {
-    let completed = 0;
-    let resolved = false;
-    
-    promises.forEach(async (p) => {
-      const res = await p;
-      if (res && res.url && !resolved) {
-        resolved = true;
-        resolve(res);
-      } else {
-        completed++;
-        if (completed === urls.length && !resolved) {
-          resolved = true;
-          resolve(null);
+  // Stage 1: Try the first URL (usually Vidnest or direct high-speed provider)
+  try {
+    const firstUrl = urls[0];
+    const streamUrl = await fastScrape(browser, firstUrl, sharedState);
+    if (streamUrl) {
+      // Clean up others just in case
+      sharedState.resolved = true;
+      if (sharedState.pages) {
+        for (const p of sharedState.pages) {
+          try { await p.close().catch(() => {}); } catch(err){}
         }
       }
+      return { url: streamUrl, ref: firstUrl };
+    }
+  } catch (e) {
+    console.error("Stage 1 race error:", e);
+  }
+  
+  if (sharedState.resolved) return null;
+  
+  // Stage 2: Try the next 2 URLs in parallel (safe for memory & CPU)
+  const nextUrls = urls.slice(1, 3);
+  if (nextUrls.length > 0) {
+    const promises = nextUrls.map(async (url) => {
+      try {
+        const streamUrl = await fastScrape(browser, url, sharedState);
+        if (streamUrl) {
+          return { url: streamUrl, ref: url };
+        }
+      } catch (e) {}
+      return null;
     });
     
-    // Safety fallback
-    setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        resolve(null);
+    const stage2Res = await new Promise((resolve) => {
+      let completed = 0;
+      let finished = false;
+      promises.forEach(async (p) => {
+        const res = await p;
+        if (res && res.url && !finished) {
+          finished = true;
+          resolve(res);
+        } else {
+          completed++;
+          if (completed === promises.length && !finished) {
+            finished = true;
+            resolve(null);
+          }
+        }
+      });
+      setTimeout(() => {
+        if (!finished) {
+          finished = true;
+          resolve(null);
+        }
+      }, 7000);
+    });
+    
+    if (stage2Res) {
+      sharedState.resolved = true;
+      if (sharedState.pages) {
+        for (const p of sharedState.pages) {
+          try { await p.close().catch(() => {}); } catch(err){}
+        }
       }
-    }, 8500);
-  });
+      return stage2Res;
+    }
+  }
+  
+  if (sharedState.resolved) return null;
+  
+  // Stage 3: Try remaining URLs in parallel as fallback
+  const remainingUrls = urls.slice(3);
+  if (remainingUrls.length > 0) {
+    const promises = remainingUrls.map(async (url) => {
+      try {
+        const streamUrl = await fastScrape(browser, url, sharedState);
+        if (streamUrl) {
+          return { url: streamUrl, ref: url };
+        }
+      } catch (e) {}
+      return null;
+    });
+    
+    const stage3Res = await new Promise((resolve) => {
+      let completed = 0;
+      let finished = false;
+      promises.forEach(async (p) => {
+        const res = await p;
+        if (res && res.url && !finished) {
+          finished = true;
+          resolve(res);
+        } else {
+          completed++;
+          if (completed === promises.length && !finished) {
+            finished = true;
+            resolve(null);
+          }
+        }
+      });
+      setTimeout(() => {
+        if (!finished) {
+          finished = true;
+          resolve(null);
+        }
+      }, 7000);
+    });
+    
+    if (stage3Res) {
+      sharedState.resolved = true;
+      if (sharedState.pages) {
+        for (const p of sharedState.pages) {
+          try { await p.close().catch(() => {}); } catch(err){}
+        }
+      }
+      return stage3Res;
+    }
+  }
+  
+  // Final safety cleanup of any stray pages
+  sharedState.resolved = true;
+  if (sharedState.pages) {
+    for (const p of sharedState.pages) {
+      try { await p.close().catch(() => {}); } catch(err){}
+    }
+  }
+  
+  return null;
 }
 
 // ========================================================
@@ -841,13 +959,11 @@ function resolveChunkWithToken(chunk, parentUrlObj) {
 // ========================================================
 async function pipeMediaTunnel(req, res, targetUrl, referer) {
   try {
+    // We keep targetUrl as is (already single decoded by Express).
+    // If it contains double encoded starts like http%3A%2F%2F, decode it once.
     let cleanUrl = targetUrl;
-    while (cleanUrl.includes('%3A') || cleanUrl.includes('%2F')) {
-      try {
-        const d = decodeURIComponent(cleanUrl);
-        if (d === cleanUrl) break;
-        cleanUrl = d;
-      } catch (e) { break; }
+    if (cleanUrl.startsWith('http%3A%2F%2F') || cleanUrl.startsWith('https%3A%2F%2F')) {
+      cleanUrl = decodeURIComponent(cleanUrl);
     }
 
     const targetUrlObj = new URL(cleanUrl);
@@ -857,17 +973,25 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
     // Extract and parse custom headers encoded in query parameter if present
     let parsedHeaders = {};
-    if (targetUrlObj.searchParams.has('headers')) {
+    const headersParam = req.query.headers || targetUrlObj.searchParams.get('headers');
+    if (headersParam) {
       try {
-        parsedHeaders = JSON.parse(targetUrlObj.searchParams.get('headers'));
+        parsedHeaders = JSON.parse(decodeURIComponent(headersParam));
       } catch (e) {
-        console.error("Error parsing headers parameter inside proxy:", e);
+        try {
+          parsedHeaders = JSON.parse(headersParam);
+        } catch (err) {
+          console.error("Error parsing headers parameter inside proxy:", err);
+        }
       }
     }
 
+    const headersParamStr = headersParam ? (typeof headersParam === 'object' ? JSON.stringify(headersParam) : headersParam) : '';
+    const headersQuery = headersParamStr ? `&headers=${encodeURIComponent(headersParamStr)}` : '';
+
     // ক্রোম ব্রাউজার ট্যাবে সরাসরি লিঙ্ক খুললে অটো-প্লেয়ার প্রদান
     const acceptHeader = req.headers['accept'] || '';
-    if (acceptHeader.includes('text/html') && !req.headers.range && !cleanUrl.includes('.ts')) {
+    if (acceptHeader.includes('text/html') && !req.headers.range && !cleanUrl.includes('.ts') && !req.query.raw) {
       const htmlPlayer = `<!DOCTYPE html>
 <html>
 <head>
@@ -883,7 +1007,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
   <video id="v" controls autoplay playsinline></video>
   <script>
     const v = document.getElementById('v');
-    const src = "${proxyBase}?url=${encodeURIComponent(cleanUrl)}&referer=${encodeURIComponent(ref)}&raw=1";
+    const src = "${proxyBase}?url=${encodeURIComponent(cleanUrl)}&referer=${encodeURIComponent(ref)}&raw=1${headersQuery}";
     if (Hls.isSupported()) {
       const hls = new Hls({ enableWorker: true });
       hls.loadSource(src);
@@ -967,6 +1091,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     if (isM3u8) {
       const utf8Text = buffer.toString('utf8');
       const lines = utf8Text.split('\n');
+      const headersQuery = headersParam ? `&headers=${encodeURIComponent(headersParam)}` : '';
 
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
@@ -977,7 +1102,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
           if (trimmed.includes('URI="')) {
             return line.replace(/URI="([^"]+)"/g, (match, p1) => {
               const absKey = resolveChunkWithToken(p1, targetUrlObj);
-              return `URI="${proxyBase}?url=${encodeURIComponent(absKey)}&referer=${encodeURIComponent(ref)}"`;
+              return `URI="${proxyBase}?url=${encodeURIComponent(absKey)}&referer=${encodeURIComponent(ref)}${headersQuery}"`;
             });
           }
           return line;
@@ -985,7 +1110,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
         // সেগমেন্ট লিঙ্ক রিরাইটিং ও টোকেন ধরে রাখা
         const absChunk = resolveChunkWithToken(trimmed, targetUrlObj);
-        return `${proxyBase}?url=${encodeURIComponent(absChunk)}&referer=${encodeURIComponent(ref)}`;
+        return `${proxyBase}?url=${encodeURIComponent(absChunk)}&referer=${encodeURIComponent(ref)}${headersQuery}`;
       }).join('\n');
 
       res.set({
@@ -1018,7 +1143,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 app.get(['/api/stream-proxy', '/api/proxy-stream'], async (req, res) => {
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
-  return pipeMediaTunnel(req, res, decodeURIComponent(url), referer ? decodeURIComponent(referer) : '');
+  return pipeMediaTunnel(req, res, url, referer || '');
 });
 
 app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online!'));
