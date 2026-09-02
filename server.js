@@ -966,28 +966,99 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       cleanUrl = decodeURIComponent(cleanUrl);
     }
 
+    let parsedHeaders = {};
+
+    // Robust unwrapping of any remote proxy wrappers to fetch directly from unblocked CDN
+    let prevUrl = "";
+    while (cleanUrl !== prevUrl) {
+      prevUrl = cleanUrl;
+      if (cleanUrl.includes('proxy?url=') || cleanUrl.includes('ts-proxy?url=')) {
+        try {
+          const parsedUrl = new URL(cleanUrl);
+          const innerHeaders = parsedUrl.searchParams.get('headers');
+          if (innerHeaders) {
+            try {
+              const decodedHeaders = JSON.parse(decodeURIComponent(innerHeaders));
+              parsedHeaders = { ...parsedHeaders, ...decodedHeaders };
+            } catch (eh) {
+              try {
+                const directHeaders = JSON.parse(innerHeaders);
+                parsedHeaders = { ...parsedHeaders, ...directHeaders };
+              } catch (err) {}
+            }
+          }
+          const innerUrl = parsedUrl.searchParams.get('url');
+          if (innerUrl) {
+            cleanUrl = decodeURIComponent(innerUrl);
+          }
+        } catch (e) {
+          const match = cleanUrl.match(/(?:ts-)?proxy\?url=([^&]+)/);
+          if (match && match[1]) {
+            cleanUrl = decodeURIComponent(match[1]);
+          }
+          const headersMatch = cleanUrl.match(/headers=([^&]+)/);
+          if (headersMatch && headersMatch[1]) {
+            try {
+              const decodedHeaders = JSON.parse(decodeURIComponent(headersMatch[1]));
+              parsedHeaders = { ...parsedHeaders, ...decodedHeaders };
+            } catch (eh) {}
+          }
+        }
+      }
+    }
+
     const targetUrlObj = new URL(cleanUrl);
     const domain = targetUrlObj.origin;
     const ref = referer ? decodeURIComponent(referer) : domain;
     const proxyBase = `${getHostUrl(req)}/api/stream-proxy`;
 
     // Extract and parse custom headers encoded in query parameter if present
-    let parsedHeaders = {};
     const headersParam = req.query.headers || targetUrlObj.searchParams.get('headers');
     if (headersParam) {
       try {
-        parsedHeaders = JSON.parse(decodeURIComponent(headersParam));
+        const decodedHeaders = JSON.parse(decodeURIComponent(headersParam));
+        parsedHeaders = { ...parsedHeaders, ...decodedHeaders };
       } catch (e) {
         try {
-          parsedHeaders = JSON.parse(headersParam);
+          const directHeaders = JSON.parse(headersParam);
+          parsedHeaders = { ...parsedHeaders, ...directHeaders };
         } catch (err) {
           console.error("Error parsing headers parameter inside proxy:", err);
         }
       }
     }
 
-    const headersParamStr = headersParam ? (typeof headersParam === 'object' ? JSON.stringify(headersParam) : headersParam) : '';
+    if (req.query.headers) {
+      try {
+        const queryHeaders = JSON.parse(decodeURIComponent(req.query.headers));
+        parsedHeaders = { ...parsedHeaders, ...queryHeaders };
+      } catch (e) {
+        try {
+          const directQueryHeaders = JSON.parse(req.query.headers);
+          parsedHeaders = { ...parsedHeaders, ...directQueryHeaders };
+        } catch (err) {}
+      }
+    }
+
+    const headersParamStr = parsedHeaders ? JSON.stringify(parsedHeaders) : '';
     const headersQuery = headersParamStr ? `&headers=${encodeURIComponent(headersParamStr)}` : '';
+
+    // Prepare case-insensitive request headers
+    const requestHeaders = {
+      'referer': ref,
+      'origin': ref.replace(/\/$/, ''),
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    };
+
+    if (parsedHeaders) {
+      for (const [k, v] of Object.entries(parsedHeaders)) {
+        requestHeaders[k.toLowerCase()] = v;
+      }
+    }
+
+    if (req.headers.range) {
+      requestHeaders['range'] = req.headers.range;
+    }
 
     // ক্রোম ব্রাউজার ট্যাবে সরাসরি লিঙ্ক খুললে অটো-প্লেয়ার প্রদান
     const acceptHeader = req.headers['accept'] || '';
@@ -1032,13 +1103,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
           method: 'GET',
           url: cleanUrl,
           responseType: 'stream',
-          headers: {
-            'Referer': ref,
-            'Origin': ref.replace(/\/$/, ''),
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            ...parsedHeaders,
-            ...(req.headers.range ? { 'Range': req.headers.range } : {})
-          },
+          headers: requestHeaders,
           timeout: 25000
         });
 
@@ -1074,13 +1139,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       method: 'GET',
       url: cleanUrl,
       responseType: 'arraybuffer',
-      headers: {
-        'Referer': ref,
-        'Origin': ref.replace(/\/$/, ''),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        ...parsedHeaders,
-        ...(req.headers.range ? { 'Range': req.headers.range } : {})
-      },
+      headers: requestHeaders,
       timeout: 25000
     });
 
@@ -1091,7 +1150,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     if (isM3u8) {
       const utf8Text = buffer.toString('utf8');
       const lines = utf8Text.split('\n');
-      const headersQuery = headersParam ? `&headers=${encodeURIComponent(headersParam)}` : '';
 
       const rewritten = lines.map(line => {
         const trimmed = line.trim();
@@ -1136,7 +1194,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
     return res.send(buffer);
   } catch (error) {
-    res.status(502).send('Stream Tunnel Gateway Error');
+    res.status(502).send('Stream Tunnel Gateway Error: ' + error.message);
   }
 }
 
