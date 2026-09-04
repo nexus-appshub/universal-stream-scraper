@@ -21,6 +21,9 @@ function getHostUrl(req) {
   return `${proto}://${host}`;
 }
 
+// Auto-detect public domain for 24/7 self-pinging on Render / Cloud Run
+let detectedExternalUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || process.env.SELF_PING_URL || process.env.APP_URL || null;
+
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -28,6 +31,17 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Headers', '*');
   res.header('Access-Control-Expose-Headers', '*');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
+
+  // Capture public domain dynamically from request headers
+  try {
+    const host = req.headers['x-forwarded-host'] || req.get('host') || '';
+    if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      const cleanHost = host.split(',')[0].trim();
+      detectedExternalUrl = `${proto}://${cleanHost}`;
+    }
+  } catch (e) {}
+
   next();
 });
 
@@ -1204,7 +1218,110 @@ app.get(['/api/stream-proxy', '/api/proxy-stream'], async (req, res) => {
   return pipeMediaTunnel(req, res, url, referer || '');
 });
 
-app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online!'));
+// ========================================================
+// 24/7 Render Anti-Sleep & Self-Ping Keep-Alive Engine
+// ========================================================
+const keepAliveStats = {
+  startedAt: new Date().toISOString(),
+  totalPings: 0,
+  successfulPings: 0,
+  failedPings: 0,
+  lastPingTime: null,
+  lastPingStatus: 'initialized',
+  lastPingTarget: null
+};
+
+async function performKeepAlivePing() {
+  const targets = [];
+  const port = process.env.PORT || 3000;
+
+  // 1. External public URL (Render free tier sleeps on lack of external incoming traffic)
+  if (detectedExternalUrl) {
+    targets.push(`${detectedExternalUrl.replace(/\/+$/, '')}/api/ping`);
+  }
+  
+  // 2. Local fallback loop
+  targets.push(`http://127.0.0.1:${port}/api/ping`);
+
+  keepAliveStats.totalPings++;
+  keepAliveStats.lastPingTime = new Date().toISOString();
+
+  for (const target of targets) {
+    try {
+      const response = await axios.get(target, {
+        headers: {
+          'User-Agent': 'Render-24-7-KeepAlive/1.0',
+          'X-Keep-Alive': 'true'
+        },
+        timeout: 10000
+      });
+      if (response.status === 200) {
+        keepAliveStats.successfulPings++;
+        keepAliveStats.lastPingStatus = 'success (200 OK)';
+        keepAliveStats.lastPingTarget = target;
+        console.log(`[24/7 Keep-Alive] Ping SUCCESS -> ${target} (Uptime: ${Math.floor(process.uptime() / 60)}m, Ping #${keepAliveStats.totalPings})`);
+        break;
+      }
+    } catch (err) {
+      console.warn(`[24/7 Keep-Alive] Ping note for ${target}:`, err.message);
+      keepAliveStats.failedPings++;
+      keepAliveStats.lastPingStatus = `error: ${err.message}`;
+    }
+  }
+}
+
+function start247KeepAlive() {
+  console.log('🚀 24/7 Render Anti-Sleep Keep-Alive Engine Activated!');
+  // First ping after 20 seconds
+  setTimeout(() => {
+    performKeepAlivePing().catch(() => {});
+  }, 20000);
+
+  // Ping every 4 minutes (240,000 ms) — Render sleeps after 15m, so 4m guarantees 0 seconds downtime
+  const PING_INTERVAL = 4 * 60 * 1000;
+  setInterval(() => {
+    performKeepAlivePing().catch(() => {});
+  }, PING_INTERVAL);
+}
+
+// 24/7 Ping & Health Check Endpoints
+app.get(['/api/ping', '/ping', '/api/health', '/health'], (req, res) => {
+  res.json({
+    status: 'ok',
+    message: '🚀 24/7 High-Load Scraper Server is Awake and Active!',
+    uptimeSeconds: Math.floor(process.uptime()),
+    uptimeFormatted: `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m ${Math.floor(process.uptime() % 60)}s`,
+    timestamp: new Date().toISOString(),
+    keepAlive: {
+      totalPings: keepAliveStats.totalPings,
+      successfulPings: keepAliveStats.successfulPings,
+      lastPingTime: keepAliveStats.lastPingTime,
+      lastPingStatus: keepAliveStats.lastPingStatus,
+      detectedUrl: detectedExternalUrl
+    }
+  });
+});
+
+app.get('/api/keep-alive/status', (req, res) => {
+  res.json({
+    engine: '24/7 Render Anti-Sleep Engine',
+    status: 'ACTIVE',
+    serverUptime: `${Math.floor(process.uptime() / 60)} minutes`,
+    detectedExternalUrl: detectedExternalUrl || 'Waiting for first request or RENDER_EXTERNAL_URL env var',
+    stats: keepAliveStats,
+    memoryUsage: process.memoryUsage()
+  });
+});
+
+app.get('/api/keep-alive/trigger', async (req, res) => {
+  await performKeepAlivePing();
+  res.json({ message: 'Keep-alive ping executed manually', stats: keepAliveStats });
+});
+
+app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online (24/7 Keep-Alive Active)!'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Active on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Active on ${PORT}`);
+  start247KeepAlive();
+});
