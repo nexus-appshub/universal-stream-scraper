@@ -852,10 +852,10 @@ async function handleResolveStream(req, res) {
   });
 }
 
-app.get(['/api/resolve-stream', '/api/v1/extract'], handleResolveStream);
+app.get(['/api/resolve-stream', '/api/v1/extract', '/api/extract', '/api/resolve', '/api/resolve_stream', '/resolve-stream', '/extract', '/api/stream/extract', '/api/stream/resolve'], handleResolveStream);
 
 // ডাইরেক্ট স্ট্রিম রিডাইরেক্ট রাউট
-app.get('/api/v1/stream', async (req, res) => {
+app.get(['/api/v1/stream', '/api/stream', '/api/v1/stream-redirect', '/stream'], async (req, res) => {
   const params = parseParams(req.query);
   const hostUrl = getHostUrl(req);
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
@@ -1212,7 +1212,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
   }
 }
 
-app.get(['/api/stream-proxy', '/api/proxy-stream'], async (req, res) => {
+app.get(['/api/stream-proxy', '/api/proxy-stream', '/api/stream/proxy', '/api/stream/proxy-stream', '/api/proxy', '/stream-proxy', '/proxy'], async (req, res) => {
   const { url, referer } = req.query;
   if (!url) return res.status(400).send('URL missing');
   return pipeMediaTunnel(req, res, url, referer || '');
