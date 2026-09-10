@@ -314,7 +314,68 @@ async function getAnikotoWatchUrl(title, episode = 1) {
 }
 
 // ========================================================
-// ৩. TMDB ডাটাবেস স্ক্র্যাপার প্রোভাইডার (SUB, Movies, TV Series & Anime)
+// ৩. DIRECT HTTP FAST-RESOLVER ENGINE (Zero-Latency Stream Fetcher)
+// ========================================================
+async function tryDirectHttpResolvers(params) {
+  const { id, isTv, season, episode, title } = params;
+  
+  const directTasks = [
+    // Direct Vidlink JSON API probe
+    async () => {
+      try {
+        const epParam = isTv ? `/${season}/${episode}` : '';
+        const apiUrl = isTv 
+          ? `https://vidlink.pro/api/tv/${id}${epParam}`
+          : `https://vidlink.pro/api/movie/${id}`;
+        const res = await axios.get(apiUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://vidlink.pro/'
+          },
+          timeout: 2500
+        });
+        const stream = res.data?.stream?.playlist || res.data?.url || res.data?.sources?.[0]?.url;
+        if (stream && (stream.includes('.m3u8') || stream.includes('/hls/'))) {
+          return { url: stream, ref: 'https://vidlink.pro/' };
+        }
+      } catch (e) {}
+      return null;
+    },
+    // Direct Autoembed JSON probe
+    async () => {
+      try {
+        const url = isTv
+          ? `https://player.autoembed.cc/api/tv/${id}/${season}/${episode}`
+          : `https://player.autoembed.cc/api/movie/${id}`;
+        const res = await axios.get(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://player.autoembed.cc/'
+          },
+          timeout: 2500
+        });
+        const stream = res.data?.url || res.data?.stream || res.data?.sources?.[0]?.file;
+        if (stream && (stream.includes('.m3u8') || stream.includes('/hls/'))) {
+          return { url: stream, ref: 'https://player.autoembed.cc/' };
+        }
+      } catch (e) {}
+      return null;
+    }
+  ];
+
+  try {
+    const results = await Promise.allSettled(directTasks.map(fn => fn()));
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value && r.value.url) {
+        return r.value;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+// ========================================================
+// ৪. MULTI-PROVIDER WEB PROVIDERS (Extended Parallel Target Matrix)
 // ========================================================
 async function getWebProviderUrls(params) {
   const { id, isTv, season, episode, title, lang, isAnime } = params;
@@ -326,22 +387,60 @@ async function getWebProviderUrls(params) {
     urlsTried: []
   };
 
-  // Build regular TV/Movie URLs (instant)
+  // Build extended provider matrix (Ordered by speed & reliability)
   if (isTv) {
     regularUrls.push(
+      // 1. Primary High-Speed Providers
       `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
+      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`,
       `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
+      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
+      `https://vidlink.pro/tv/${id}/${season}/${episode}`,
+      // 2. Vidsrc Family (to, me, in, pm, net, xyz, cc, icu)
+      `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`,
+      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+      `https://vidsrc.in/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+      `https://vidsrc.pm/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
+      `https://vidsrc.net/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
       `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
+      `https://vidsrc.cc/v2/embed/tv/${id}/${season}/${episode}`,
+      `https://vidsrc.icu/embed/tv/${id}/${season}/${episode}`,
+      // 3. Vidzee Family
+      `https://vidzee.net/embed/tv/${id}/${season}/${episode}`,
+      `https://player.vidzee.net/embed/tv/${id}/${season}/${episode}`,
+      `https://vidzee.org/embed/tv/${id}/${season}/${episode}`,
+      // 4. Extended Multi-Embed Video Engines
+      `https://embedder.net/e/tv/${id}/${season}/${episode}`,
+      `https://player.smashy.stream/tv/${id}?s=${season}&e=${episode}`,
+      `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`,
+      `https://moviesapi.club/tv/${id}-${season}-${episode}`
     );
   } else {
     regularUrls.push(
+      // 1. Primary High-Speed Providers
       `https://vidnest.fun/movie/${id}`,
-      `https://player.autoembed.cc/embed/movie/${id}`,
-      `https://vidsrc.sbs/embed/movie/${id}`,
       `https://vidrock.net/embed/movie/${id}`,
-      `https://vidsrc.xyz/embed/movie?tmdb=${id}`
+      `https://vidsrc.sbs/embed/movie/${id}`,
+      `https://player.autoembed.cc/embed/movie/${id}`,
+      `https://vidlink.pro/movie/${id}`,
+      // 2. Vidsrc Family (to, me, in, pm, net, xyz, cc, icu)
+      `https://vidsrc.to/embed/movie/${id}`,
+      `https://vidsrc.me/embed/movie?tmdb=${id}`,
+      `https://vidsrc.in/embed/movie?tmdb=${id}`,
+      `https://vidsrc.pm/embed/movie?tmdb=${id}`,
+      `https://vidsrc.net/embed/movie?tmdb=${id}`,
+      `https://vidsrc.xyz/embed/movie?tmdb=${id}`,
+      `https://vidsrc.cc/v2/embed/movie/${id}`,
+      `https://vidsrc.icu/embed/movie/${id}`,
+      // 3. Vidzee Family
+      `https://vidzee.net/embed/movie/${id}`,
+      `https://player.vidzee.net/embed/movie/${id}`,
+      `https://vidzee.org/embed/movie/${id}`,
+      // 4. Extended Multi-Embed Video Engines
+      `https://embedder.net/e/movie/${id}`,
+      `https://player.smashy.stream/movie/${id}`,
+      `https://www.2embed.cc/embed/${id}`,
+      `https://moviesapi.club/movie/${id}`
     );
   }
 
@@ -402,6 +501,43 @@ async function fastScrape(browser, targetUrl, sharedState) {
   await page.setViewport({ width: 1280, height: 720 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
+  // Anti-bot stealth & bypass automation barriers in embedded players
+  await page.evaluateOnNewDocument(() => {
+    try {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      window.chrome = { runtime: {} };
+      // Prevent popups from stealing focus or freezing scraper
+      window.open = () => null;
+      window.alert = () => null;
+      window.confirm = () => true;
+      window.prompt = () => null;
+
+      // Hook XMLHttpRequest & fetch at page level to immediately capture decrypted streams
+      const originalFetch = window.fetch;
+      window.fetch = async function(...args) {
+        try {
+          const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url);
+          if (url && (url.includes('.m3u8') || url.includes('/hls/') || url.includes('.mp4'))) {
+            window.__capturedStream = url;
+          }
+        } catch (e) {}
+        return originalFetch.apply(this, args);
+      };
+
+      const originalOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url) {
+        try {
+          if (url && (url.includes('.m3u8') || url.includes('/hls/') || url.includes('.mp4'))) {
+            window.__capturedStream = url;
+          }
+        } catch (e) {}
+        return originalOpen.apply(this, arguments);
+      };
+    } catch (e) {}
+  });
+
   await page.setRequestInterception(true);
   page.on('request', (req) => {
     if (sharedState && sharedState.resolved) {
@@ -410,8 +546,8 @@ async function fastScrape(browser, targetUrl, sharedState) {
     }
     const type = req.resourceType();
     const url = req.url();
-    // ইমেজ এবং ফন্ট ব্লক করি - কিন্তু সিএসএস, স্ক্রিপ্ট ও মিডিয়া সচল রাখি
-    if (['image', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('ads')) {
+    // Block heavy images and fonts, but keep scripts, xhr, fetch, iframes, stylesheets active
+    if (['image', 'font'].includes(type) || url.includes('analytics') || url.includes('doubleclick') || url.includes('googlesyndication')) {
       req.abort().catch(() => {});
     } else {
       req.continue().catch(() => {});
@@ -421,27 +557,42 @@ async function fastScrape(browser, targetUrl, sharedState) {
   return new Promise(async (resolve) => {
     let localResolved = false;
 
-    page.on('response', async (response) => {
-      if (sharedState && sharedState.resolved) {
-        if (!localResolved) {
-          localResolved = true;
-          await page.close().catch(() => {});
-          resolve(null);
-        }
-        return;
+    const finalizeStream = async (streamUrl) => {
+      if (!streamUrl || localResolved) return;
+      localResolved = true;
+      if (sharedState) {
+        sharedState.resolved = true;
       }
+      await page.close().catch(() => {});
+      resolve(streamUrl);
+    };
+
+    page.on('response', async (response) => {
+      if (localResolved || (sharedState && sharedState.resolved)) return;
+
       const u = response.url();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
       const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
 
-      if (isMedia && !isFake && !localResolved) {
-        localResolved = true;
-        if (sharedState) {
-          sharedState.resolved = true;
-        }
-        await page.close().catch(() => {});
-        resolve(u);
+      if (isMedia && !isFake) {
+        return finalizeStream(u);
       }
+
+      // Check API / AJAX responses that return JSON payloads containing media URLs
+      try {
+        const contentType = response.headers()['content-type'] || '';
+        const isJsonEndpoint = contentType.includes('json') || u.includes('/ajax/') || u.includes('/api/') || u.includes('sources') || u.includes('source') || u.includes('stream') || u.includes('rcp');
+        if (isJsonEndpoint) {
+          const text = await response.text().catch(() => '');
+          if (text && (text.includes('.m3u8') || text.includes('/hls/'))) {
+            const m3u8Match = text.match(/https?:\\?\/\\?\/[^"'\s<>]+\.m3u8[^"'\s<>]*/);
+            if (m3u8Match) {
+              const cleaned = m3u8Match[0].replace(/\\\//g, '/').replace(/\\"/g, '"');
+              return finalizeStream(cleaned);
+            }
+          }
+        }
+      } catch (e) {}
     });
 
     try {
@@ -450,50 +601,80 @@ async function fastScrape(browser, targetUrl, sharedState) {
         await page.close().catch(() => {});
         return resolve(null);
       }
-      // পেজ লোড হওয়ার জন্য ৫ সেকেন্ড সময় দিই
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 5000 });
+
+      // 1. Navigate to target embed URL
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 5500 });
       
-      // Multi-frame play button click trigger to support deep-nested player iframes (Anikoto, Vidnest, Megacloud, etc.)
+      // 2. Deep multi-frame and nested player triggering
       const clickPlayAcrossFrames = async () => {
         if (localResolved || (sharedState && sharedState.resolved)) return;
+
+        // Check if page-level hook captured a stream
+        try {
+          const captured = await page.evaluate(() => window.__capturedStream);
+          if (captured) {
+            return finalizeStream(captured);
+          }
+        } catch (e) {}
+
         const frames = page.frames();
         for (const frame of frames) {
           try {
             await frame.evaluate(() => {
+              // Click primary play buttons and video containers
               const selectors = [
                 'video', 'button', '#play', '.play-btn', '.jw-display-icon-container', 
                 '.vjs-big-play-button', '.play-icon', '#player', '.iframe-player',
                 '.play_btn', '.playButton', '.play-button', '[aria-label="Play"]',
-                '.play', '.clickable', '.plyr__control--overlaid'
+                '.play', '.clickable', '.plyr__control--overlaid', '#player-cover',
+                '.cover', '#cover', '.video-js', '.jwplayer', '#jwplayer', '#vjs_video_3',
+                // Server switchers & source tabs in deep embeds
+                '.server-item', '.servers button', '.server_list li', '[data-server]',
+                '[data-id]', '.btn-server', '.dropdown-item', '#servers li', '.source-item'
               ];
               for (const selector of selectors) {
-                const el = document.querySelector(selector);
-                if (el) {
-                  el.click();
-                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                }
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                  try {
+                    el.click();
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                  } catch (err) {}
+                });
               }
+
+              // Remove ad overlays / modal backdrops blocking clicks
+              const blockers = document.querySelectorAll('.modal-backdrop, .overlay, #overlay, .ad-banner, .close-ad, [class*="popup"]');
+              blockers.forEach(b => {
+                try { b.click(); } catch(e){}
+              });
             });
           } catch (e) {}
         }
+
+        // Simulate physical viewport interaction in the center of the video stage
+        try {
+          await page.mouse.click(640, 360).catch(() => {});
+        } catch (e) {}
       };
 
-      // Poll and click across frames every 400ms for 3.2 seconds
-      for (let i = 0; i < 8; i++) {
+      // Poll across frames every 350ms for 3.5 seconds
+      for (let i = 0; i < 10; i++) {
         if (localResolved || (sharedState && sharedState.resolved)) break;
         await clickPlayAcrossFrames();
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 350));
       }
     } catch (e) {}
 
-    // টোটাল স্ক্র্যাপার টাইমআউট ৫ সেকেন্ড করা হলো
+    // Total safety timeout
     setTimeout(async () => {
       if (!localResolved) {
         localResolved = true;
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 5500);
+    }, 6000);
   });
 }
 
@@ -760,6 +941,25 @@ async function handleResolveStream(req, res) {
     });
   }
 
+  // 1. Try Instant Direct HTTP Resolvers (Zero Chromium Overhead - sub-second response)
+  try {
+    const directResult = await tryDirectHttpResolvers(params);
+    if (directResult && directResult.url) {
+      const data = { url: directResult.url, ref: directResult.ref, time: Date.now() };
+      streamCache.set(cacheKey, data);
+      return res.json({
+        success: true,
+        isEmbed: false,
+        streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(directResult.url)}&referer=${encodeURIComponent(directResult.ref)}`,
+        rawUrl: directResult.url,
+        proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(directResult.url)}&referer=${encodeURIComponent(directResult.ref)}`,
+        stream_url: directResult.url,
+        type: params.typeStr,
+        source: 'direct_http_resolver'
+      });
+    }
+  } catch (e) {}
+
   if (pendingScrapes.has(cacheKey)) {
     try {
       const result = await pendingScrapes.get(cacheKey);
@@ -852,7 +1052,7 @@ async function handleResolveStream(req, res) {
   });
 }
 
-app.get(['/api/resolve-stream', '/api/v1/extract', '/api/extract', '/api/resolve', '/api/resolve_stream', '/resolve-stream', '/extract', '/api/stream/extract', '/api/stream/resolve'], handleResolveStream);
+app.get(['/api/resolve-stream', '/api/v1/extract', '/api/extract', '/api/resolve', '/api/resolve_stream', '/resolve-stream', '/extract', '/api/stream/extract', '/api/stream/resolve', '/ajax/get-stream', '/api/get-stream'], handleResolveStream);
 
 // ডাইরেক্ট স্ট্রিম রিডাইরেক্ট রাউট
 app.get(['/api/v1/stream', '/api/stream', '/api/v1/stream-redirect', '/stream'], async (req, res) => {
@@ -861,6 +1061,15 @@ app.get(['/api/v1/stream', '/api/stream', '/api/v1/stream-redirect', '/stream'],
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
   
   let targetStream = streamCache.get(cacheKey);
+  if (!targetStream) {
+    // 1. Direct HTTP resolver first
+    const directResult = await tryDirectHttpResolvers(params);
+    if (directResult && directResult.url) {
+      targetStream = { url: directResult.url, ref: directResult.ref, time: Date.now() };
+      streamCache.set(cacheKey, targetStream);
+    }
+  }
+
   if (!targetStream) {
     let acquired = false;
     try {
@@ -884,6 +1093,206 @@ app.get(['/api/v1/stream', '/api/stream', '/api/v1/stream-redirect', '/stream'],
     return res.redirect(`${hostUrl}/api/stream-proxy?url=${encodeURIComponent(targetStream.url)}&referer=${encodeURIComponent(targetStream.ref)}`);
   }
   return res.status(404).send('Stream not found.');
+});
+
+// ========================================================
+// ৫. DYNAMIC SEARCH & AUTO-COMPLETE API
+// ========================================================
+app.get(['/api/search', '/api/v1/search', '/search'], async (req, res) => {
+  const query = (req.query.q || req.query.query || req.query.keyword || '').trim();
+  const type = (req.query.type || 'all').toLowerCase();
+
+  if (!query) {
+    return res.json({ success: true, results: [] });
+  }
+
+  const results = [];
+
+  // 1. Try AniList GraphQL Search
+  try {
+    const aniQuery = `
+      query ($search: String) {
+        Page (page: 1, perPage: 8) {
+          media (search: $search, sort: POPULARITY_DESC) {
+            id
+            idMal
+            title {
+              romaji
+              english
+              native
+            }
+            coverImage {
+              large
+              medium
+            }
+            bannerImage
+            format
+            episodes
+            averageScore
+            seasonYear
+            genres
+          }
+        }
+      }
+    `;
+    const aniRes = await axios.post('https://graphql.anilist.co', {
+      query: aniQuery,
+      variables: { search: query }
+    }, { timeout: 3000 });
+
+    const mediaList = aniRes.data?.data?.Page?.media || [];
+    mediaList.forEach(item => {
+      const displayTitle = item.title?.english || item.title?.romaji || item.title?.native;
+      results.push({
+        id: item.id,
+        anilistId: item.id,
+        malId: item.idMal,
+        title: displayTitle,
+        type: item.format === 'MOVIE' ? 'movie' : 'anime',
+        poster: item.coverImage?.large || item.coverImage?.medium,
+        banner: item.bannerImage,
+        year: item.seasonYear,
+        score: item.averageScore,
+        genres: item.genres,
+        watchUrl: `/api/stream-proxy?url=${encodeURIComponent(`https://vidnest.fun/anime/${item.id}/1/sub`)}&referer=${encodeURIComponent('https://vidnest.fun/')}`
+      });
+    });
+  } catch (e) {}
+
+  // 2. Try Anikoto Search Suggestion
+  try {
+    const anikotoUrl = `https://anikoto.cz/ajax/search/suggest?keyword=${encodeURIComponent(query)}`;
+    const anikotoRes = await axios.get(anikotoUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      timeout: 3000
+    });
+    if (anikotoRes.data && anikotoRes.data.html) {
+      const matchRegex = /<a\s+href="\/watch\/([^"]+)"[^>]*title="([^"]+)"/g;
+      let m;
+      while ((m = matchRegex.exec(anikotoRes.data.html)) !== null) {
+        const slug = m[1];
+        const t = m[2];
+        if (!results.some(r => r.title.toLowerCase() === t.toLowerCase())) {
+          results.push({
+            id: slug,
+            title: t,
+            type: 'anime',
+            slug: slug,
+            source: 'anikoto'
+          });
+        }
+      }
+    }
+  } catch (e) {}
+
+  return res.json({
+    success: true,
+    query,
+    count: results.length,
+    results
+  });
+});
+
+// ========================================================
+// ৬. APPLICATION CONFIG & PLAYER SETTINGS API
+// ========================================================
+app.get(['/api/config', '/config'], (req, res) => {
+  const hostUrl = getHostUrl(req);
+  res.json({
+    appName: "Universal Stream Scraper & Parallel Video Engine",
+    version: "2.5.0",
+    status: "operational",
+    endpoints: {
+      resolve: `${hostUrl}/api/resolve-stream?id={tmdb_id}&type={movie|tv}&season=1&episode=1&title={title}`,
+      stream: `${hostUrl}/api/v1/stream?id={tmdb_id}&type={movie|tv}&season=1&episode=1`,
+      proxy: `${hostUrl}/api/stream-proxy?url={m3u8_url}&referer={origin_referer}`,
+      search: `${hostUrl}/api/search?q={query}`,
+      m3uPlaylist: `${hostUrl}/api/playlist.m3u?id={tmdb_id}&type={movie|tv}&title={title}`
+    },
+    supportedProviders: [
+      "Vidnest (HLS & Direct CDN)",
+      "Autoembed / Player.autoembed.cc",
+      "Vidlink Pro Direct API",
+      "Vidsrc.sbs / Multi-Language Audio",
+      "Vidsrc.xyz",
+      "Vidrock",
+      "SmashyStream / Embedder",
+      "2embed",
+      "MoviesAPI",
+      "Anikoto / AniList Anime Resolver",
+      "Megaplay MAL/AniList Dub Engine"
+    ],
+    streamingArchitecture: {
+      masterPlaylistHandling: "Automatic token & variant index rewriting (1080p, 720p, 480p)",
+      segmentTunneling: "Binary pipeline streaming with Byte-Range & CORS support",
+      antiHotlinkBypass: "Dynamic Referer / Origin header injection"
+    },
+    keepAliveActive: true
+  });
+});
+
+// ========================================================
+// ৭. GITHUB & IPTV M3U8 PLAYLIST EXPORTER (VLC, TiviMate, OTT Compatible)
+// ========================================================
+app.get(['/api/playlist.m3u', '/api/stream.m3u8', '/api/vlc.m3u8', '/playlist.m3u'], async (req, res) => {
+  const params = parseParams(req.query);
+  const hostUrl = getHostUrl(req);
+  const contentName = params.title || (params.isTv ? `Series ${params.id} S${params.season}E${params.episode}` : `Movie ${params.id}`);
+  const groupTitle = params.isAnime ? "Anime / VOD" : (params.isTv ? "TV Shows" : "Movies");
+
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  let streamInfo = streamCache.get(cacheKey);
+
+  if (!streamInfo) {
+    const directResult = await tryDirectHttpResolvers(params);
+    if (directResult && directResult.url) {
+      streamInfo = { url: directResult.url, ref: directResult.ref };
+      streamCache.set(cacheKey, streamInfo);
+    }
+  }
+
+  if (!streamInfo) {
+    let acquired = false;
+    try {
+      await acquireScrapeSlot();
+      acquired = true;
+      const browser = await getWarmBrowser();
+      const { urls } = await getWebProviderUrls(params);
+      const raceResult = await raceScrapeUrls(browser, urls);
+      if (raceResult && raceResult.url) {
+        streamInfo = { url: raceResult.url, ref: raceResult.ref };
+        streamCache.set(cacheKey, streamInfo);
+      }
+    } finally {
+      if (acquired) {
+        releaseScrapeSlot();
+      }
+    }
+  }
+
+  const finalStreamUrl = streamInfo 
+    ? `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(streamInfo.url)}&referer=${encodeURIComponent(streamInfo.ref)}`
+    : `${hostUrl}/api/v1/stream?id=${params.id}&type=${params.typeStr}&season=${params.season}&episode=${params.episode}&title=${encodeURIComponent(params.title)}`;
+
+  const originDomain = streamInfo?.ref || hostUrl;
+
+  const m3uContent = `#EXTM3U
+#EXTINF:-1 group-title="${groupTitle}", ${contentName}
+#EXTVLCOPT:http-referrer=${originDomain}
+#EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+${finalStreamUrl}|Referer=${originDomain}
+`;
+
+  res.set({
+    'Content-Type': 'application/x-mpegURL; charset=utf-8',
+    'Content-Disposition': `inline; filename="${params.id}.m3u"`,
+    'Access-Control-Allow-Origin': '*'
+  });
+
+  return res.send(m3uContent);
 });
 
 // ========================================================
