@@ -1,0 +1,1 @@
+The main resolver was upgraded to use StreamResolver and HeadlessInterceptor, with /api/debug/extract added for authorized diagnostic testing. Use /api/debug/extract?url=... to inspect discovered HLS metadata.
