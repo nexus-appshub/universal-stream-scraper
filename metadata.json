@@ -1,6 +1,6 @@
 {
   "name": "Universal Stream Scraper",
-  "description": "Universal Media Stream Scraper Engine",
+  "description": "Universal Media Stream Scraper Engine with 24/7 Render Keep-Alive Auto-Ping Service",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

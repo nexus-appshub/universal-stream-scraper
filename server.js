@@ -21,12 +21,143 @@ function getHostUrl(req) {
   return `${proto}://${host}`;
 }
 
+// ========================================================
+// ⏰ 24/7 KEEP-ALIVE AUTO-PINGER ENGINE (RENDER.COM & CLOUD SLEEP PREVENTION)
+// ========================================================
+const keepAliveState = {
+  startTime: Date.now(),
+  intervalMinutes: Math.max(1, Math.min(14, Number(process.env.PING_INTERVAL_MINUTES) || 8)),
+  configuredUrl: (process.env.PING_URL || process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || process.env.APP_URL || '').trim().replace(/\/$/, ''),
+  autoDetectedUrl: '',
+  lastPingTime: null,
+  lastPingDurationMs: null,
+  lastPingStatus: 'idle',
+  lastPingStatusCode: null,
+  lastPingError: null,
+  totalPings: 0,
+  successfulPings: 0,
+  failedPings: 0,
+  history: [],
+  enabled: process.env.DISABLE_SELF_PING !== 'true',
+  nextPingTime: null
+};
+
+function getActiveKeepAliveUrl() {
+  if (keepAliveState.configuredUrl) return keepAliveState.configuredUrl;
+  if (keepAliveState.autoDetectedUrl) return keepAliveState.autoDetectedUrl;
+  const port = process.env.PORT || 3000;
+  return `http://127.0.0.1:${port}`;
+}
+
+async function executeKeepAlivePing(isManual = false) {
+  const targetBase = getActiveKeepAliveUrl();
+  const pingUrl = targetBase.endsWith('/ping') ? targetBase : `${targetBase}/ping`;
+  const startTime = Date.now();
+  
+  try {
+    const res = await axios.get(pingUrl, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Render-24-7-KeepAlive-Worker/1.0',
+        'Cache-Control': 'no-cache',
+        'X-KeepAlive-Ping': 'true'
+      }
+    });
+    
+    const duration = Date.now() - startTime;
+    keepAliveState.lastPingTime = Date.now();
+    keepAliveState.lastPingDurationMs = duration;
+    keepAliveState.lastPingStatus = 'success';
+    keepAliveState.lastPingStatusCode = res.status;
+    keepAliveState.lastPingError = null;
+    keepAliveState.totalPings++;
+    keepAliveState.successfulPings++;
+    
+    const logItem = {
+      timestamp: new Date().toISOString(),
+      url: pingUrl,
+      status: 'success',
+      statusCode: res.status,
+      durationMs: duration,
+      manual: isManual
+    };
+    keepAliveState.history.unshift(logItem);
+    if (keepAliveState.history.length > 20) keepAliveState.history.pop();
+    
+    console.log(`📡 [Keep-Alive 24/7] 🟢 Ping success: ${pingUrl} (${duration}ms) | Total: ${keepAliveState.totalPings}`);
+    return { success: true, duration, statusCode: res.status, url: pingUrl };
+  } catch (err) {
+    const duration = Date.now() - startTime;
+    keepAliveState.lastPingTime = Date.now();
+    keepAliveState.lastPingDurationMs = duration;
+    keepAliveState.lastPingStatus = 'failed';
+    keepAliveState.lastPingStatusCode = err.response ? err.response.status : 500;
+    keepAliveState.lastPingError = err.message;
+    keepAliveState.totalPings++;
+    keepAliveState.failedPings++;
+    
+    const logItem = {
+      timestamp: new Date().toISOString(),
+      url: pingUrl,
+      status: 'failed',
+      statusCode: err.response ? err.response.status : null,
+      error: err.message,
+      durationMs: duration,
+      manual: isManual
+    };
+    keepAliveState.history.unshift(logItem);
+    if (keepAliveState.history.length > 20) keepAliveState.history.pop();
+    
+    console.warn(`📡 [Keep-Alive 24/7] ⚠️ Ping warning on ${pingUrl}: ${err.message} | Duration: ${duration}ms`);
+    return { success: false, duration, error: err.message, url: pingUrl };
+  }
+}
+
+function startKeepAliveEngine() {
+  if (!keepAliveState.enabled) {
+    console.log('📡 [Keep-Alive 24/7] Self-pinging is disabled by DISABLE_SELF_PING=true');
+    return;
+  }
+
+  const intervalMs = keepAliveState.intervalMinutes * 60 * 1000;
+  keepAliveState.nextPingTime = Date.now() + 30000;
+
+  console.log(`📡 [Keep-Alive 24/7] Engine initialized. Ping interval: every ${keepAliveState.intervalMinutes} minutes (Render sleep threshold is ~15 min).`);
+  console.log(`📡 [Keep-Alive 24/7] Target URL: ${getActiveKeepAliveUrl()}`);
+
+  // Initial warm-up ping after 30 seconds
+  setTimeout(async () => {
+    await executeKeepAlivePing(false);
+    keepAliveState.nextPingTime = Date.now() + intervalMs;
+  }, 30000);
+
+  // Recurring ping interval (every 8 mins by default)
+  setInterval(async () => {
+    await executeKeepAlivePing(false);
+    keepAliveState.nextPingTime = Date.now() + intervalMs;
+  }, intervalMs);
+}
+
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
   res.header('Access-Control-Allow-Headers', '*');
   res.header('Access-Control-Expose-Headers', '*');
+
+  // Auto-detect public URL for 24/7 keep-alive self-pinging if not explicitly configured
+  if (!keepAliveState.configuredUrl && !keepAliveState.autoDetectedUrl) {
+    try {
+      const host = req.headers['x-forwarded-host'] || req.get('host');
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      if (host && !host.includes('localhost') && !host.includes('127.0.0.1') && !host.includes('0.0.0.0')) {
+        const cleanHost = host.includes(',') ? host.split(',')[0].trim() : host.trim();
+        keepAliveState.autoDetectedUrl = `${proto}://${cleanHost}`;
+        console.log(`🌐 [Keep-Alive] Auto-detected public host for 24/7 pinging: ${keepAliveState.autoDetectedUrl}`);
+      }
+    } catch (e) {}
+  }
+
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
@@ -1204,7 +1335,461 @@ app.get(['/api/stream-proxy', '/api/proxy-stream'], async (req, res) => {
   return pipeMediaTunnel(req, res, url, referer || '');
 });
 
-app.get('/', (req, res) => res.send('🚀 High-Load Universal Scraper Online!'));
+// ========================================================
+// ⏰ 24/7 KEEP-ALIVE & HEALTH ENDPOINTS
+// ========================================================
+app.get('/ping', (req, res) => {
+  res.set({
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'X-KeepAlive-Response': 'true'
+  });
+  if (req.query.json === 'true' || req.query.json === '1') {
+    return res.json({
+      status: 'pong',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor((Date.now() - keepAliveState.startTime) / 1000)
+    });
+  }
+  return res.status(200).send('pong');
+});
+
+app.get(['/health', '/api/health'], (req, res) => {
+  const mem = process.memoryUsage();
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor((Date.now() - keepAliveState.startTime) / 1000),
+    uptimeFormatted: formatUptime(Math.floor((Date.now() - keepAliveState.startTime) / 1000)),
+    memoryUsageMb: {
+      rss: Math.round(mem.rss / 1024 / 1024 * 100) / 100,
+      heapTotal: Math.round(mem.heapTotal / 1024 / 1024 * 100) / 100,
+      heapUsed: Math.round(mem.heapUsed / 1024 / 1024 * 100) / 100
+    },
+    keepAlive: {
+      enabled: keepAliveState.enabled,
+      intervalMinutes: keepAliveState.intervalMinutes,
+      targetUrl: getActiveKeepAliveUrl(),
+      configuredUrl: keepAliveState.configuredUrl || null,
+      autoDetectedUrl: keepAliveState.autoDetectedUrl || null,
+      totalPings: keepAliveState.totalPings,
+      successfulPings: keepAliveState.successfulPings,
+      failedPings: keepAliveState.failedPings,
+      lastPingStatus: keepAliveState.lastPingStatus,
+      lastPingTime: keepAliveState.lastPingTime ? new Date(keepAliveState.lastPingTime).toISOString() : null,
+      lastPingDurationMs: keepAliveState.lastPingDurationMs,
+      nextPingInSeconds: keepAliveState.nextPingTime ? Math.max(0, Math.round((keepAliveState.nextPingTime - Date.now()) / 1000)) : 0
+    }
+  });
+});
+
+app.get(['/api/keepalive', '/api/keepalive/status'], (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      ...keepAliveState,
+      targetUrl: getActiveKeepAliveUrl(),
+      activePort: process.env.PORT || 3000,
+      uptimeSeconds: Math.floor((Date.now() - keepAliveState.startTime) / 1000),
+      uptimeFormatted: formatUptime(Math.floor((Date.now() - keepAliveState.startTime) / 1000)),
+      nextPingInSeconds: keepAliveState.nextPingTime ? Math.max(0, Math.round((keepAliveState.nextPingTime - Date.now()) / 1000)) : 0
+    }
+  });
+});
+
+app.all(['/api/keepalive/ping', '/api/ping-trigger'], async (req, res) => {
+  const result = await executeKeepAlivePing(true);
+  res.json({
+    success: result.success,
+    message: result.success ? 'Keep-alive ping sent successfully!' : 'Keep-alive ping encountered an error',
+    pingResult: result,
+    keepAliveSummary: {
+      totalPings: keepAliveState.totalPings,
+      lastPingTime: new Date(keepAliveState.lastPingTime).toISOString(),
+      targetUrl: getActiveKeepAliveUrl()
+    }
+  });
+});
+
+function formatUptime(seconds) {
+  const d = Math.floor(seconds / (3600 * 24));
+  const h = Math.floor((seconds % (3600 * 24)) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const parts = [];
+  if (d > 0) parts.push(`${d}d`);
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+  return parts.join(' ');
+}
+
+// ========================================================
+// 🖥️ INTERACTIVE DASHBOARD & 24/7 MONITOR
+// ========================================================
+app.get('/', (req, res) => {
+  const hostUrl = getHostUrl(req);
+  const targetUrl = getActiveKeepAliveUrl();
+  const uptimeSec = Math.floor((Date.now() - keepAliveState.startTime) / 1000);
+  const uptimeStr = formatUptime(uptimeSec);
+  const mem = process.memoryUsage();
+  const heapUsedMb = (mem.heapUsed / 1024 / 1024).toFixed(1);
+
+  const html = `<!DOCTYPE html>
+<html lang="bn" class="h-full bg-slate-900 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Universal Stream Scraper & 24/7 Keep-Alive Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Hind+Siliguri:wght@400;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', 'Hind Siliguri', sans-serif; }
+    code, pre { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="min-h-full flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-emerald-500 selection:text-slate-950">
+  
+  <!-- Navigation Header -->
+  <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+          <svg class="w-6 h-6 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="font-bold text-slate-100 text-lg leading-tight flex items-center gap-2">
+            Universal Stream Scraper
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">24/7 Online</span>
+          </h1>
+          <p class="text-xs text-slate-400">Render.com Sleep-Prevention & Auto-Ping Engine</p>
+        </div>
+      </div>
+      
+      <div class="flex items-center gap-3">
+        <button id="pingNowBtn" onclick="triggerManualPing()" class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-semibold px-3.5 py-2 rounded-lg shadow-sm transition-all">
+          <svg id="pingIcon" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span id="pingBtnText">Ping Now</span>
+        </button>
+        <a href="/health" target="_blank" class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 bg-slate-800/80 border border-slate-700/60 px-3 py-2 rounded-lg transition-colors">
+          <span>Health JSON</span>
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    
+    <!-- Hero Status Banner -->
+    <div class="bg-gradient-to-r from-emerald-950/40 via-slate-900 to-cyan-950/40 border border-emerald-500/20 rounded-2xl p-6 relative overflow-hidden shadow-xl">
+      <div class="absolute -right-12 -bottom-12 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+      
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+        <div class="space-y-2">
+          <div class="flex items-center gap-2.5">
+            <span class="relative flex h-3 w-3">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
+            <span class="text-xs uppercase tracking-wider text-emerald-400 font-bold">24/7 Keep-Alive Auto-Ping Active</span>
+          </div>
+          <h2 class="text-2xl font-extrabold text-white tracking-tight">
+            রেন্ডার স্লিপ প্রিভেনশন সিস্টেম সক্রিয় আছে
+          </h2>
+          <p class="text-sm text-slate-300 max-w-2xl leading-relaxed">
+            Render.com-এর ফ্রি সার্ভার ১৫ মিনিট কোনো রিকোয়েস্ট না পেলে স্লিপ মোডে চলে যায়। আপনার সার্ভারটি প্রতি <strong>${keepAliveState.intervalMinutes} মিনিট</strong> পরপর স্বয়ংক্রিয়ভাবে সেলফ-পিং পাঠিয়ে সার্ভারকে <strong>২৪x৭ সম্পূর্ণ সজাগ (Awake)</strong> রাখবে।
+          </p>
+        </div>
+
+        <!-- Next Ping Countdown Box -->
+        <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 min-w-[240px] flex flex-col items-center justify-center text-center shadow-inner">
+          <span class="text-xs text-slate-400 font-medium">পরবর্তী স্বয়ংক্রিয় পিং</span>
+          <div id="countdownTimer" class="text-3xl font-mono font-bold text-emerald-400 my-1">
+            --:--
+          </div>
+          <span class="text-[11px] text-slate-500">ইন্টারভাল: প্রতি ${keepAliveState.intervalMinutes} মিনিট</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Metrics Grid -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      
+      <!-- Metric 1: Target URL -->
+      <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-2">
+          <span>Target Ping Host</span>
+          <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>
+        </div>
+        <div class="font-mono text-sm font-semibold text-slate-200 truncate" id="targetUrlDisplay" title="${targetUrl}">
+          ${targetUrl}
+        </div>
+        <span class="text-[11px] text-emerald-400/90 mt-2 flex items-center gap-1">
+          <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+          ${keepAliveState.configuredUrl ? 'Custom / Render Env' : 'Auto-Detected / Local'}
+        </span>
+      </div>
+
+      <!-- Metric 2: Total Pings -->
+      <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-2">
+          <span>Total Pings Sent</span>
+          <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+        </div>
+        <div class="text-2xl font-bold text-slate-100 font-mono" id="totalPingsCount">
+          ${keepAliveState.totalPings}
+        </div>
+        <span class="text-[11px] text-slate-400 mt-2">
+          সফল: <strong class="text-emerald-400" id="successPingsCount">${keepAliveState.successfulPings}</strong> | ব্যর্থ: <strong class="text-rose-400" id="failedPingsCount">${keepAliveState.failedPings}</strong>
+        </span>
+      </div>
+
+      <!-- Metric 3: Latency -->
+      <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-2">
+          <span>Last Ping Latency</span>
+          <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        </div>
+        <div class="text-2xl font-bold text-slate-100 font-mono" id="lastLatencyDisplay">
+          ${keepAliveState.lastPingDurationMs !== null ? `${keepAliveState.lastPingDurationMs} ms` : 'Standby'}
+        </div>
+        <span class="text-[11px] text-slate-400 mt-2" id="lastPingStatusBadge">
+          স্ট্যাটাস: <span class="text-emerald-400 font-semibold">${keepAliveState.lastPingStatus.toUpperCase()}</span>
+        </span>
+      </div>
+
+      <!-- Metric 4: Uptime -->
+      <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-2">
+          <span>Server Uptime / Memory</span>
+          <svg class="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" /></svg>
+        </div>
+        <div class="text-2xl font-bold text-slate-100 font-mono" id="uptimeDisplay">
+          ${uptimeStr}
+        </div>
+        <span class="text-[11px] text-slate-400 mt-2">
+          Heap: <strong class="text-slate-200">${heapUsedMb} MB</strong>
+        </span>
+      </div>
+
+    </div>
+
+    <!-- Instructions & Configuration Guide -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      
+      <!-- Guide Card: Render Setup -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
+        <div class="flex items-center gap-2 text-emerald-400 font-bold text-base">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <span>Render.com-এ ২৪/৭ চালু রাখার নির্দেশিকা</span>
+        </div>
+        
+        <ul class="text-xs sm:text-sm text-slate-300 space-y-3 leading-relaxed">
+          <li class="flex items-start gap-2">
+            <span class="text-emerald-400 font-bold mt-0.5">১.</span>
+            <span><strong>স্বয়ংক্রিয় সেটআপ:</strong> Render-এ ডেপ্লয় করলে Render স্বয়ংক্রিয়ভাবে <code>RENDER_EXTERNAL_URL</code> এনভায়রনমেন্ট ভেরিয়েবল সরবরাহ করে। আমাদের কোড এটি নিজে থেকেই ডিটেক্ট করে নেয়।</span>
+          </li>
+          <li class="flex items-start gap-2">
+            <span class="text-emerald-400 font-bold mt-0.5">২.</span>
+            <span><strong>এনভায়রনমেন্ট ভেরিয়েবল (ঐচ্ছিক):</strong> Render ড্যাশবোর্ডের <em>Environment</em> সেকশনে চাইলে <code>PING_URL=https://your-service.onrender.com</code> এবং <code>PING_INTERVAL_MINUTES=8</code> সেট করে দিতে পারেন।</span>
+          </li>
+          <li class="flex items-start gap-2">
+            <span class="text-emerald-400 font-bold mt-0.5">৩.</span>
+            <span><strong>এক্সটার্নাল ব্যাকআপ (১০০% গ্যারান্টি):</strong> আরো ১০০% নিশ্চিত থাকার জন্য বিনামূল্যে <a href="https://uptimerobot.com" target="_blank" class="text-emerald-400 underline font-semibold">UptimeRobot.com</a> বা <a href="https://cron-job.org" target="_blank" class="text-emerald-400 underline font-semibold">Cron-Job.org</a>-এ গিয়ে আপনার <code>https://your-app.onrender.com/ping</code> লিঙ্কটি প্রতি ৫ মিনিটে মনিটর করতে দিয়ে রাখতে পারেন।</span>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Quick API Reference Card -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
+        <div class="flex items-center gap-2 text-cyan-400 font-bold text-base">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+          <span>গুরুত্বপূর্ণ API এন্ডপয়েন্টসমূহ</span>
+        </div>
+
+        <div class="space-y-2.5 text-xs font-mono">
+          <div class="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+            <span class="text-emerald-400 font-bold">GET /ping</span>
+            <span class="text-slate-400 text-[11px]">লাইটওয়েট কিপ-অ্যালাইভ পিং</span>
+          </div>
+          <div class="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+            <span class="text-cyan-400 font-bold">GET /health</span>
+            <span class="text-slate-400 text-[11px]">সার্ভার হেলথ ও মেমরি স্ট্যাটাস</span>
+          </div>
+          <div class="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+            <span class="text-purple-400 font-bold">GET /api/keepalive/status</span>
+            <span class="text-slate-400 text-[11px]">পিং হিস্টোরি ও টাইমার ডেটা</span>
+          </div>
+          <div class="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+            <span class="text-amber-400 font-bold">GET /api/resolve-stream</span>
+            <span class="text-slate-400 text-[11px]">হাই-স্পিড মিডিয়া রেজলভার</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Live Ping History Section -->
+    <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-slate-100 text-sm flex items-center gap-2">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          সর্বশেষ পিং লগ (Live Keep-Alive Activity)
+        </h3>
+        <span class="text-xs text-slate-500 font-mono" id="lastUpdated">আপডেট হচ্ছে...</span>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-800 bg-slate-950/40">
+            <tr>
+              <th class="py-2.5 px-3">সময়</th>
+              <th class="py-2.5 px-3">স্ট্যাটাস</th>
+              <th class="py-2.5 px-3">রেসপন্স কোড</th>
+              <th class="py-2.5 px-3">ল্যাটেন্সি</th>
+              <th class="py-2.5 px-3">টার্গেট লিঙ্ক</th>
+              <th class="py-2.5 px-3">টাইপ</th>
+            </tr>
+          </thead>
+          <tbody id="pingHistoryBody" class="divide-y divide-slate-800/60 font-mono">
+            <!-- Dynamic rows will be inserted here -->
+            <tr>
+              <td colspan="6" class="py-4 text-center text-slate-500 font-sans">লগ লোড হচ্ছে...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800/80 bg-slate-900/40 py-4 text-center text-xs text-slate-500">
+    Universal Stream Scraper Engine &bull; Render 24/7 Sleep Prevention Keep-Alive Active
+  </footer>
+
+  <script>
+    let nextPingTime = ${keepAliveState.nextPingTime || Date.now() + 30000};
+    
+    function updateCountdown() {
+      const now = Date.now();
+      const diffMs = nextPingTime - now;
+      const el = document.getElementById('countdownTimer');
+      if (!el) return;
+
+      if (diffMs <= 0) {
+        el.innerText = "00:00 (পিং চলছে...)";
+      } else {
+        const totalSec = Math.floor(diffMs / 1000);
+        const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
+        const s = (totalSec % 60).toString().padStart(2, '0');
+        el.innerText = m + ":" + s;
+      }
+    }
+    setInterval(updateCountdown, 1000);
+    updateCountdown();
+
+    async function fetchKeepAliveStatus() {
+      try {
+        const res = await fetch('/api/keepalive/status');
+        const json = await res.json();
+        if (json && json.data) {
+          const d = json.data;
+          if (d.nextPingTime) nextPingTime = d.nextPingTime;
+          
+          document.getElementById('totalPingsCount').innerText = d.totalPings;
+          document.getElementById('successPingsCount').innerText = d.successfulPings;
+          document.getElementById('failedPingsCount').innerText = d.failedPings;
+          document.getElementById('targetUrlDisplay').innerText = d.targetUrl;
+          document.getElementById('uptimeDisplay').innerText = d.uptimeFormatted;
+
+          if (d.lastPingDurationMs !== null) {
+            document.getElementById('lastLatencyDisplay').innerText = d.lastPingDurationMs + ' ms';
+          }
+          
+          const badge = document.getElementById('lastPingStatusBadge');
+          if (d.lastPingStatus === 'success') {
+            badge.innerHTML = 'স্ট্যাটাস: <span class="text-emerald-400 font-semibold">SUCCESS (200 OK)</span>';
+          } else if (d.lastPingStatus === 'failed') {
+            badge.innerHTML = 'স্ট্যাটাস: <span class="text-rose-400 font-semibold">FAILED</span>';
+          }
+
+          renderHistory(d.history || []);
+          document.getElementById('lastUpdated').innerText = 'আপডেট: ' + new Date().toLocaleTimeString();
+        }
+      } catch (e) {}
+    }
+
+    function renderHistory(list) {
+      const tbody = document.getElementById('pingHistoryBody');
+      if (!tbody) return;
+      if (!list || list.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-slate-500 font-sans">এখনও কোনো পিং রেকর্ড তৈরি হয়নি। পিং রানিং আছে...</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = list.map(item => {
+        const isOk = item.status === 'success';
+        const statusBadge = isOk 
+          ? '<span class="inline-flex items-center gap-1 text-emerald-400"><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span> Success</span>'
+          : '<span class="inline-flex items-center gap-1 text-rose-400"><span class="h-1.5 w-1.5 rounded-full bg-rose-400"></span> Error</span>';
+        
+        const dateStr = new Date(item.timestamp).toLocaleTimeString();
+        return \`<tr class="hover:bg-slate-800/30 transition-colors">
+          <td class="py-2.5 px-3 text-slate-300">\${dateStr}</td>
+          <td class="py-2.5 px-3">\${statusBadge}</td>
+          <td class="py-2.5 px-3 text-slate-300">\${item.statusCode || '-'}</td>
+          <td class="py-2.5 px-3 text-slate-200 font-bold">\${item.durationMs !== undefined ? item.durationMs + 'ms' : '-'}</td>
+          <td class="py-2.5 px-3 text-slate-400 truncate max-w-[200px]" title="\${item.url}">\${item.url}</td>
+          <td class="py-2.5 px-3 text-slate-400 text-[11px]">\${item.manual ? '⚡ Manual' : '⏰ Auto'}</td>
+        </tr>\`;
+      }).join('');
+    }
+
+    async function triggerManualPing() {
+      const btn = document.getElementById('pingNowBtn');
+      const text = document.getElementById('pingBtnText');
+      const icon = document.getElementById('pingIcon');
+
+      btn.disabled = true;
+      text.innerText = 'Pinging...';
+      icon.classList.add('animate-spin');
+
+      try {
+        const res = await fetch('/api/keepalive/ping', { method: 'POST' });
+        const result = await res.json();
+        await fetchKeepAliveStatus();
+      } catch (e) {
+        alert('Ping error: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        text.innerText = 'Ping Now';
+        icon.classList.remove('animate-spin');
+      }
+    }
+
+    // Initial fetch & poll every 10 seconds
+    fetchKeepAliveStatus();
+    setInterval(fetchKeepAliveStatus, 10000);
+  </script>
+</body>
+</html>`;
+
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  return res.send(html);
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Active on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Active on ${PORT}`);
+  startKeepAliveEngine();
+});
+
