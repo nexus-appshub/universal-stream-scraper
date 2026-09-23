@@ -82,6 +82,9 @@
 </head>
 <body class="min-h-full flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-emerald-500 selection:text-slate-950">
 
+  <!-- 💡 CINEMA FOCUS MODE / LIGHTS OFF OVERLAY (Blank black surroundings) -->
+  <div id="cinemaFocusOverlay" onclick="toggleCinemaFocusMode()" class="hidden fixed inset-0 bg-black/95 backdrop-blur-xl z-[9998] transition-opacity duration-300 opacity-0 cursor-pointer"></div>
+
   <!-- ========================================== -->
   <!-- 🧭 STICKY TOP NAVBAR (Edge-to-Edge Glass) -->
   <!-- ========================================== -->
@@ -158,6 +161,14 @@
         </div>
       </div>
 
+      <!-- 💡 HEADER LIGHTS OFF / BLUR BUTTON -->
+      <button onclick="toggleCinemaFocusMode()" id="headerFocusBtn" class="px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/50 hover:bg-slate-800 text-slate-300 hover:text-emerald-400 transition flex items-center gap-1.5 text-xs font-semibold shadow-sm ml-2 shrink-0 cursor-pointer" title="Lights Off / Blur Surroundings">
+        <svg class="w-4 h-4 text-emerald-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 01-2 2h-1.5a2 2 0 01-2-2v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+        </svg>
+        <span class="hidden sm:inline">Blur / Lights Off</span>
+      </button>
+
     </div>
   </header>
 
@@ -193,126 +204,40 @@
       </div>
 
       <!-- ========================================== -->
-      <!-- 📐 SPLIT LAYOUT: 1/3 Left (Selector) + 2/3 Right (Player & Servers) -->
+      <!-- 🎬 CINEMA STAGE: 3-COLUMN LAYOUT IN WEB VIEW -->
+      <!-- [ Left: Upcoming Next Episodes ] | [ Center: Video Player ] | [ Right: Available Servers ] -->
       <!-- ========================================== -->
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-start">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 items-stretch mb-4 sm:mb-5">
 
-        <!-- ========================================== -->
-        <!-- 📑 LEFT COLUMN: 1/3 (4 of 12) - SEASON & EPISODE SELECTOR -->
-        <!-- ========================================== -->
-        <div id="playerLeftSidebar" class="lg:col-span-4 order-2 lg:order-1 flex flex-col gap-4 px-3 sm:px-0">
-          
-          <!-- TV Series Season & Episode Selector Container -->
-          <div id="seriesSelectorContainer" class="flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-4 shadow-xl">
-            <div class="flex flex-col gap-3 mb-3.5 pb-3 border-b border-slate-800">
-              <!-- Line 1 & Line 2: Icon + Title & Subtitle -->
-              <div class="flex items-center gap-3">
-                <div class="p-2.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0">
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+        <!-- 📑 LEFT COLUMN (3 of 12) - UPCOMING / NEXT EPISODES THUMBNAILS SECTION -->
+        <div class="lg:col-span-3 order-2 lg:order-1 flex flex-col">
+          <div id="upcomingSection" class="h-full flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-3 sm:p-4 shadow-xl mx-3 sm:mx-0">
+            <div class="flex items-center justify-between gap-2 pb-2.5 mb-2 border-b border-slate-800 shrink-0">
+              <div class="flex items-center gap-2 overflow-hidden">
+                <div class="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shrink-0">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                   </svg>
                 </div>
-                <div class="min-w-0 flex-1">
-                  <h3 class="text-sm sm:text-base font-bold text-white tracking-tight leading-snug">Season & Episodes</h3>
-                  <p class="text-[11px] sm:text-xs text-slate-400 leading-none mt-1">Click any episode to stream</p>
+                <div class="min-w-0">
+                  <span id="upcomingTitleText" class="text-xs sm:text-sm font-bold text-white uppercase tracking-wider block truncate">Next Episodes</span>
+                  <p id="upcomingSubtitleText" class="text-[10px] text-slate-400 hidden sm:block truncate">Upcoming in queue</p>
                 </div>
               </div>
 
-              <!-- Line 3: Season Selector Dropdown Button -->
-              <div class="relative w-full">
-                <select 
-                  id="seasonSelect" 
-                  onchange="onSeasonChange(this.value)" 
-                  class="w-full appearance-none px-3.5 py-2 text-xs sm:text-sm font-bold bg-slate-950/90 border border-slate-800 hover:border-emerald-500/50 focus:border-emerald-500 text-emerald-400 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 transition cursor-pointer shadow-inner pr-9"
-                >
-                  <!-- Seasons populated dynamically -->
-                </select>
-                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-emerald-400">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                </div>
-              </div>
-
-              <!-- Line 4: Episode Jumper Bar (Jump directly to any Episode #) -->
-              <div class="flex items-center gap-2 pt-0.5">
-                <div class="relative flex-1 flex items-center">
-                  <span class="absolute left-3 text-[11px] font-bold text-purple-400">EP #</span>
-                  <input 
-                    id="episodeJumperInput" 
-                    type="number" 
-                    min="1" 
-                    placeholder="Jump to ep number..." 
-                    onkeydown="if(event.key==='Enter') jumpToEpisode()"
-                    class="w-full pl-12 pr-3 py-1.5 text-xs font-bold bg-slate-950/90 border border-slate-800 focus:border-purple-500 text-white rounded-xl focus:outline-none focus:ring-1 focus:ring-purple-500 placeholder-slate-500 transition"
-                  >
-                </div>
-                <button 
-                  id="btnEpisodeJumper" 
-                  onclick="jumpToEpisode()" 
-                  class="px-3.5 py-1.5 text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl shadow-md flex items-center gap-1.5 transition active:scale-95 shrink-0"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
-                  <span>Jump</span>
-                </button>
-              </div>
+              <span id="upcomingBadge" class="px-2 py-0.5 text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded shrink-0">Upcoming</span>
             </div>
 
-            <!-- Episodes List (Scrollable, 1-col cards fitting the 1/3 sidebar) -->
-            <div id="episodesGrid" class="flex flex-col gap-2 max-h-[540px] lg:max-h-[620px] overflow-y-auto pr-1.5 custom-scrollbar">
-              <!-- Episodes populated dynamically -->
+            <!-- Dynamic Upcoming Episodes List (Vertical scroll in web view, horizontal scroll on mobile) -->
+            <div id="upcomingEpisodesList" class="flex lg:flex-col items-stretch gap-2.5 pt-1 overflow-x-auto lg:overflow-y-auto whitespace-nowrap lg:whitespace-normal pb-2 lg:pb-1 custom-scrollbar select-none snap-x flex-1 max-h-[280px] lg:max-h-[380px]">
+              <!-- Generated via Javascript -->
             </div>
           </div>
-
-          <!-- Movie Info Sidebar (Displayed when playing Movie instead of Series) -->
-          <div id="movieInfoSidebar" class="hidden flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-4 shadow-xl">
-            <div class="flex items-center gap-3 pb-3 border-b border-slate-800">
-              <div class="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
-              </div>
-              <div>
-                <h3 class="text-sm font-bold text-white uppercase tracking-wider">Movie Information</h3>
-                <p id="movieSidebarYearGenre" class="text-[11px] text-slate-400">Full Movie • HD 1080p</p>
-              </div>
-            </div>
-            <div class="mt-3 space-y-3 overflow-y-auto max-h-[500px] pr-1 custom-scrollbar">
-              <div class="relative aspect-video rounded-xl overflow-hidden bg-slate-950 border border-slate-800">
-                <img id="movieSidebarPoster" src="" alt="" class="w-full h-full object-cover">
-                <div class="absolute bottom-2 left-2 px-2 py-0.5 text-[10px] font-bold bg-slate-950/80 text-amber-400 rounded border border-amber-500/30 backdrop-blur flex items-center gap-1">
-                  <svg class="w-3 h-3 fill-current" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
-                  <span id="movieSidebarRating">8.5</span>
-                </div>
-              </div>
-              <div>
-                <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wide mb-1">Synopsis</h4>
-                <p id="movieSidebarOverview" class="text-xs text-slate-300 leading-relaxed"></p>
-              </div>
-              <!-- 👥 TOP CASTS SECTION IN SYNOPSIS CARD -->
-              <div id="movieSidebarCastSection" class="pt-2 border-t border-slate-800/80">
-                <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                  <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>
-                  </svg>
-                  <span>Top Cast</span>
-                </h4>
-                <div id="movieSidebarCastList" class="flex items-center gap-2.5 overflow-x-auto pb-1.5 custom-scrollbar">
-                  <!-- Cast loaded dynamically -->
-                </div>
-              </div>
-              <div class="pt-2 border-t border-slate-800/80 flex flex-wrap gap-2">
-                <span class="px-2 py-0.5 text-[10px] font-semibold bg-slate-800 text-slate-300 rounded">Full HD 1080p</span>
-                <span class="px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded">Direct Master Stream</span>
-              </div>
-            </div>
-          </div>
-
         </div>
 
-        <!-- ========================================== -->
-        <!-- 📺 RIGHT COLUMN: 2/3 (8 of 12) - VIDEO PLAYER FRAME & BELOW: SERVER SELECTION -->
-        <!-- ========================================== -->
-        <div id="playerRightColumn" class="lg:col-span-8 order-1 lg:order-2 flex flex-col gap-3 sm:gap-4">
-          
-          <!-- Video Container (Edge-to-Edge on Mobile, Rounded 2XL on Desktop) -->
-          <div class="relative w-full aspect-video bg-black rounded-none sm:rounded-2xl overflow-hidden shadow-2xl border-y sm:border border-slate-800">
+        <!-- 📺 CENTER COLUMN (6 of 12) - VIDEO PLAYER FRAME -->
+        <div class="lg:col-span-6 order-1 lg:order-2 flex flex-col justify-center">
+          <div id="mainVideoPlayerWrapper" class="relative w-full aspect-video bg-black rounded-none sm:rounded-2xl overflow-hidden shadow-2xl border-y sm:border border-slate-800 transition-all duration-300">
             <!-- Direct Native Hls.js / Video Player -->
             <video 
               id="hlsVideoPlayer" 
@@ -341,18 +266,22 @@
               <p id="playerLoadingText" class="mt-3 text-xs font-semibold text-slate-300">Loading stream...</p>
             </div>
           </div>
+        </div>
 
-          <!-- ========================================== -->
-          <!-- 🎛️ MULTI-SERVER SELECTOR BAR (Horizontally Scrollable) -->
-          <!-- ========================================== -->
-          <div id="serverSection" class="mx-3 sm:mx-0 p-3 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg">
-            <div class="flex items-center justify-between gap-3 mb-2.5">
+        <!-- 🎛️ RIGHT COLUMN (3 of 12) - AVAILABLE SERVERS LIST -->
+        <div class="lg:col-span-3 order-3 lg:order-3 flex flex-col">
+          <div id="serverSection" class="h-full flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-3 sm:p-4 shadow-xl mx-3 sm:mx-0">
+            <div class="flex items-center justify-between gap-2 pb-3 mb-2 border-b border-slate-800 shrink-0">
               <div class="flex items-center gap-2 overflow-hidden">
-                <svg class="w-4 h-4 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-                </svg>
-                <span class="text-xs sm:text-sm font-bold text-white uppercase tracking-wider truncate">Available Servers:</span>
-                <span class="hidden md:inline text-xs text-slate-400">(Active in <span class="text-emerald-400 font-bold">GREEN</span>, Playable in <span class="text-amber-400 font-bold">YELLOW</span>)</span>
+                <div class="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+                  </svg>
+                </div>
+                <div class="min-w-0">
+                  <span class="text-xs sm:text-sm font-bold text-white uppercase tracking-wider block truncate">Available Servers</span>
+                  <p class="text-[10px] text-slate-400 hidden sm:block truncate">Fast switch streaming nodes</p>
+                </div>
               </div>
 
               <div class="flex items-center gap-1.5 text-xs shrink-0">
@@ -363,12 +292,125 @@
               </div>
             </div>
 
-            <!-- Dynamic Server Buttons List (Horizontally Scrollable on all devices) -->
-            <div id="serversList" class="flex items-center gap-2 pt-1 overflow-x-auto whitespace-nowrap pb-2 custom-scrollbar select-none snap-x">
-              <!-- Generated via Javascript with Green Marked Active & Yellow Playable Servers -->
+            <!-- Dynamic Server Buttons List (Vertical on Desktop, Horizontal on Mobile) -->
+            <div id="serversList" class="flex lg:flex-col items-stretch gap-2 pt-1 overflow-x-auto lg:overflow-y-auto whitespace-nowrap lg:whitespace-normal pb-2 lg:pb-1 custom-scrollbar select-none snap-x flex-1 max-h-[280px] lg:max-h-[380px]">
+              <!-- Rendered via Javascript with Green Active & Yellow Playable Servers -->
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ========================================== -->
+      <!-- 📑 BELOW STAGE: SEASONS & EPISODES / MOVIE DETAILS -->
+      <!-- ========================================== -->
+      <div id="playerLeftSidebar" class="w-full px-3 sm:px-0 flex flex-col gap-4">
+        
+        <!-- TV Series Season & Episode Selector Container -->
+        <div id="seriesSelectorContainer" class="flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-4 sm:p-5 shadow-xl">
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 pb-3.5 border-b border-slate-800">
+            <!-- Line 1: Icon + Title & Subtitle -->
+            <div class="flex items-center gap-3">
+              <div class="p-2.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-sm sm:text-base font-bold text-white tracking-tight leading-snug">Season & Episodes</h3>
+                <p class="text-[11px] sm:text-xs text-slate-400 leading-none mt-1">Select any episode below to instant stream</p>
+              </div>
+            </div>
+
+            <!-- Season Selector Dropdown + Episode Jumper -->
+            <div class="flex flex-wrap sm:flex-nowrap items-center gap-2.5">
+              <!-- Season Selector Dropdown -->
+              <div class="relative min-w-[180px] flex-1 sm:flex-initial">
+                <select 
+                  id="seasonSelect" 
+                  onchange="onSeasonChange(this.value)" 
+                  class="w-full appearance-none px-3.5 py-2 text-xs sm:text-sm font-bold bg-slate-950/90 border border-slate-800 hover:border-emerald-500/50 focus:border-emerald-500 text-emerald-400 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 transition cursor-pointer shadow-inner pr-9"
+                >
+                  <!-- Seasons populated dynamically -->
+                </select>
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-emerald-400">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </div>
+              </div>
+
+              <!-- Episode Jumper Bar -->
+              <div class="flex items-center gap-1.5 flex-1 sm:flex-initial">
+                <div class="relative flex-1 sm:w-44 flex items-center">
+                  <span class="absolute left-3 text-[11px] font-bold text-purple-400">EP #</span>
+                  <input 
+                    id="episodeJumperInput" 
+                    type="number" 
+                    min="1" 
+                    placeholder="Jump to ep..." 
+                    onkeydown="if(event.key==='Enter') jumpToEpisode()"
+                    class="w-full pl-12 pr-3 py-2 text-xs font-bold bg-slate-950/90 border border-slate-800 focus:border-purple-500 text-white rounded-xl focus:outline-none focus:ring-1 focus:ring-purple-500 placeholder-slate-500 transition"
+                  >
+                </div>
+                <button 
+                  id="btnEpisodeJumper" 
+                  onclick="jumpToEpisode()" 
+                  class="px-3.5 py-2 text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl shadow-md flex items-center gap-1.5 transition active:scale-95 shrink-0"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+                  <span>Jump</span>
+                </button>
+              </div>
             </div>
           </div>
 
+          <!-- Episodes List (Responsive Multi-column Grid on Desktop) -->
+          <div id="episodesGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-[500px] overflow-y-auto pr-1.5 custom-scrollbar">
+            <!-- Episodes populated dynamically -->
+          </div>
+        </div>
+
+        <!-- Movie Info Sidebar (Displayed when playing Movie instead of Series) -->
+        <div id="movieInfoSidebar" class="hidden flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-4 sm:p-5 shadow-xl">
+          <div class="flex items-center gap-3 pb-3 border-b border-slate-800">
+            <div class="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-white uppercase tracking-wider">Movie Information</h3>
+              <p id="movieSidebarYearGenre" class="text-[11px] text-slate-400">Full Movie • HD 1080p</p>
+            </div>
+          </div>
+          <div class="mt-4 grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+            <div class="md:col-span-4 lg:col-span-3 relative aspect-video rounded-xl overflow-hidden bg-slate-950 border border-slate-800">
+              <img id="movieSidebarPoster" src="" alt="" class="w-full h-full object-cover">
+              <div class="absolute bottom-2 left-2 px-2 py-0.5 text-[10px] font-bold bg-slate-950/80 text-amber-400 rounded border border-amber-500/30 backdrop-blur flex items-center gap-1">
+                <svg class="w-3 h-3 fill-current" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                <span id="movieSidebarRating">8.5</span>
+              </div>
+            </div>
+            <div class="md:col-span-8 lg:col-span-9 space-y-3">
+              <div>
+                <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wide mb-1">Synopsis</h4>
+                <p id="movieSidebarOverview" class="text-xs text-slate-300 leading-relaxed"></p>
+              </div>
+              <!-- 👥 TOP CASTS SECTION IN SYNOPSIS CARD -->
+              <div id="movieSidebarCastSection" class="pt-2 border-t border-slate-800/80">
+                <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>
+                  </svg>
+                  <span>Top Cast</span>
+                </h4>
+                <div id="movieSidebarCastList" class="flex items-center gap-2.5 overflow-x-auto pb-1.5 custom-scrollbar">
+                  <!-- Cast loaded dynamically -->
+                </div>
+              </div>
+              <div class="pt-2 border-t border-slate-800/80 flex flex-wrap gap-2">
+                <span class="px-2 py-0.5 text-[10px] font-semibold bg-slate-800 text-slate-300 rounded">Full HD 1080p</span>
+                <span class="px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded">Direct Master Stream</span>
+              </div>
+            </div>
+          </div>
         </div>
 
       </div>
@@ -1428,11 +1470,14 @@
     // ========================================================
     const DEFAULT_SERVERS = [
       { id: 'flixer', name: 'Flixer (Fast VIP)', provider: 'Flixer', badge: 'Fast VIP', quality: '1080p' },
+      { id: 'hindi', name: 'Hindi (VidNest Delta)', provider: 'VidNest', badge: 'Hindi Audio', quality: '1080p' },
+      { id: 'vidsrcsbs', name: 'VidSrc (SBS Pro)', provider: 'VidSrc.SBS', badge: 'Multi-Lang', quality: '1080p' },
       { id: 'lambda', name: 'Lambda (Ultra HD)', provider: 'Lambda', badge: 'Ultra HD', quality: '1080p' },
       { id: 'gamma', name: 'Gamma (Direct CDN)', provider: 'Gamma', badge: 'Direct CDN', quality: '1080p' },
       { id: 'sigma', name: 'Sigma (Multi-Audio)', provider: 'Sigma', badge: 'Multi-Audio', quality: '1080p' },
       { id: 'delta', name: 'Delta (Master Stream)', provider: 'Delta', badge: 'Master', quality: '1080p' },
       { id: 'autoembed', name: 'Autoembed (Multi-Sub)', provider: 'Autoembed', badge: 'Multi-Sub', quality: '1080p' },
+      { id: 'vidrock', name: 'VidRock Mirror', provider: 'VidRock', badge: 'Fast Mirror', quality: '1080p' },
       { id: 'vidsrc', name: 'VidSrc (Direct VIP)', provider: 'VidSrc', badge: 'Direct VIP', quality: '1080p' }
     ];
 
@@ -1442,7 +1487,7 @@
       state.currentEpisode = episodeNum;
       state.activeServerId = 'flixer';
       state.servers = DEFAULT_SERVERS;
-      state.playableServers = new Set(['flixer', 'lambda', 'gamma', 'sigma', 'delta', 'autoembed', 'vidsrc']);
+      state.playableServers = new Set(['flixer', 'hindi', 'vidsrcsbs', 'lambda', 'gamma', 'sigma', 'delta', 'autoembed', 'vidrock', 'vidsrc']);
 
       const isTv = item.media_type === 'tv' || item.name && !item.title;
       const title = item.title || item.name || 'Untitled';
@@ -1497,7 +1542,7 @@
           if (data.hasDirectM3u8) {
             data.servers.forEach(s => state.playableServers.add(s.id));
           }
-          renderServerButtons(data.servers, state.activeServerId || 'filxer');
+          renderServerButtons(data.servers, state.activeServerId || 'flixer');
         }
       } catch (e) {
         console.error('Error fetching dynamic servers metadata:', e);
@@ -1516,25 +1561,31 @@
         
         // Active server -> Prominently GREEN; Playable server with stream -> Prominently YELLOW; Others -> Slate
         if (isActive) {
-          btn.className = 'server-btn shrink-0 snap-start px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-500/25 text-emerald-300 border-2 border-emerald-400 shadow-lg shadow-emerald-500/30 flex items-center gap-2 transition-all whitespace-nowrap';
+          btn.className = 'server-btn w-auto lg:w-full shrink-0 snap-start px-3.5 py-2.5 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border-2 border-emerald-400 shadow-lg shadow-emerald-500/20 flex items-center justify-between gap-2.5 transition-all text-left';
           btn.innerHTML = `
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
-            <span class="whitespace-nowrap">${srv.name}</span>
-            <span class="px-1.5 py-0.5 text-[9px] font-black uppercase rounded bg-emerald-400 text-slate-950 ml-1 shadow-sm shrink-0">ACTIVE</span>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
+              <span class="truncate font-bold">${srv.name}</span>
+            </div>
+            <span class="px-1.5 py-0.5 text-[9px] font-black uppercase rounded bg-emerald-400 text-slate-950 shadow-sm shrink-0">ACTIVE</span>
           `;
         } else if (isPlayable) {
-          btn.className = 'server-btn shrink-0 snap-start px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500/15 text-amber-300 border-2 border-amber-400/90 shadow-md shadow-amber-500/20 flex items-center gap-2 transition-all hover:bg-amber-500/25 whitespace-nowrap';
+          btn.className = 'server-btn w-auto lg:w-full shrink-0 snap-start px-3.5 py-2.5 rounded-xl text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-400/80 shadow-md shadow-amber-500/10 flex items-center justify-between gap-2.5 transition-all hover:bg-amber-500/25 text-left';
           btn.innerHTML = `
-            <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
-            <span class="whitespace-nowrap">${srv.name}</span>
-            <span class="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-400 text-slate-950 ml-1 shadow-sm shrink-0">⚡ PLAYABLE</span>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+              <span class="truncate font-semibold">${srv.name}</span>
+            </div>
+            <span class="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-400 text-slate-950 shadow-sm shrink-0">⚡ READY</span>
           `;
         } else {
-          btn.className = 'server-btn shrink-0 snap-start px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 flex items-center gap-1.5 transition-all whitespace-nowrap';
+          btn.className = 'server-btn w-auto lg:w-full shrink-0 snap-start px-3 py-2.5 rounded-xl text-xs font-medium bg-slate-950/80 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 flex items-center justify-between gap-2.5 transition-all text-left';
           btn.innerHTML = `
-            <span class="w-2 h-2 rounded-full bg-slate-600 shrink-0"></span>
-            <span class="whitespace-nowrap">${srv.name}</span>
-            <span class="px-1 py-0.5 text-[9px] rounded bg-slate-800 text-slate-400 ml-0.5 shrink-0">${srv.badge || srv.quality}</span>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="w-2 h-2 rounded-full bg-slate-600 shrink-0"></span>
+              <span class="truncate">${srv.name}</span>
+            </div>
+            <span class="px-1 py-0.5 text-[9px] rounded bg-slate-800 text-slate-400 shrink-0">${srv.badge || srv.quality || '1080p'}</span>
           `;
         }
 
@@ -1559,6 +1610,13 @@
       const k = (serverKey || 'flixer').toLowerCase();
 
       switch(k) {
+        case 'hindi':
+          return isTv ? `https://vidnest.fun/tv/${id}/${season}/${episode}?server=delta` : `https://vidnest.fun/movie/${id}?server=delta`;
+        case 'delta':
+          return isTv ? `https://vidnest.fun/tv/${id}/${season}/${episode}?server=delta` : `https://vidnest.fun/movie/${id}?server=delta`;
+        case 'vidsrcsbs':
+        case 'vidsrc-sbs':
+          return isTv ? `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}` : `https://vidsrc.sbs/embed/movie/${id}`;
         case 'flixer':
           return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` : `https://player.autoembed.cc/embed/movie/${id}`;
         case 'lambda':
@@ -1567,10 +1625,10 @@
           return isTv ? `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}` : `https://vidsrc.sbs/embed/movie/${id}`;
         case 'sigma':
           return isTv ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}` : `https://vidsrc.to/embed/movie/${id}`;
-        case 'delta':
-          return isTv ? `https://embed.smashystream.com/playere.php?tmdb=${id}&season=${season}&episode=${episode}` : `https://embed.smashystream.com/playere.php?tmdb=${id}`;
         case 'autoembed':
           return isTv ? `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` : `https://player.autoembed.cc/embed/movie/${id}`;
+        case 'vidrock':
+          return isTv ? `https://vidrock.net/embed/tv/${id}/${season}/${episode}` : `https://vidrock.net/embed/movie/${id}`;
         case 'vidsrc':
         default:
           return isTv ? `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}` : `https://vidsrc.sbs/embed/movie/${id}`;
@@ -1582,11 +1640,11 @@
       const iframe = document.getElementById('playerIframe');
       const input = document.getElementById('expoStreamUrlInput');
 
-      showPlayerLoading(true, 'Connecting OTT stream...');
+      const srvSlug = (server.id || 'flixer').toLowerCase();
+      showPlayerLoading(true, srvSlug === 'hindi' ? 'Connecting Hindi stream (VidNest Delta)...' : `Connecting ${server.name || 'stream'}...`);
 
       const isTv = state.activeItem.media_type === 'tv' || (state.activeItem.name && !state.activeItem.title);
       const title = state.activeItem.title || state.activeItem.name || '';
-      const srvSlug = (server.id || 'filxer').toLowerCase().replace('flixer', 'filxer').replace('lambda', 'lamda');
 
       // 1. Direct OTT stream endpoint for Expo & VLC
       const directOttM3u8Url = `${window.location.origin}/api/v1/stream?id=${state.activeItem.id}&type=${isTv ? 'tv' : 'movie'}&season=${state.currentSeason}&episode=${state.currentEpisode}&server=${srvSlug}`;
@@ -1754,8 +1812,45 @@
       }
     });
 
+    function toggleCinemaFocusMode() {
+      const overlay = document.getElementById('cinemaFocusOverlay');
+      const playerWrapper = document.getElementById('mainVideoPlayerWrapper');
+
+      if (!overlay || !playerWrapper) return;
+
+      const isActive = !overlay.classList.contains('hidden') && !overlay.classList.contains('opacity-0');
+
+      if (isActive) {
+        // Turn lights ON (Disable Focus Mode)
+        overlay.classList.add('opacity-0');
+        playerWrapper.classList.remove('z-[9999]', 'shadow-[0_0_120px_rgba(16,185,129,0.6)]', 'ring-2', 'ring-emerald-500/80');
+        setTimeout(() => {
+          overlay.classList.add('hidden');
+        }, 300);
+      } else {
+        // Ensure player is open
+        const playerSection = document.getElementById('playerSection');
+        if (playerSection && playerSection.classList.contains('hidden')) {
+          return;
+        }
+        // Turn lights OFF (Enable Focus Mode)
+        overlay.classList.remove('hidden');
+        void overlay.offsetWidth; // Force reflow
+        overlay.classList.remove('opacity-0');
+        playerWrapper.classList.add('z-[9999]', 'shadow-[0_0_120px_rgba(16,185,129,0.6)]', 'ring-2', 'ring-emerald-500/80');
+        
+        // Smooth scroll player frame into center
+        playerWrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        const overlay = document.getElementById('cinemaFocusOverlay');
+        if (overlay && !overlay.classList.contains('hidden') && !overlay.classList.contains('opacity-0')) {
+          toggleCinemaFocusMode();
+          return;
+        }
         handleModalCloseBtn();
         closeKeepAliveModal();
       }
@@ -1763,6 +1858,12 @@
 
     function closePlayer() {
       document.title = 'CineStream PRO — Stream Movies, TV Series & Anime';
+      
+      const overlay = document.getElementById('cinemaFocusOverlay');
+      if (overlay && !overlay.classList.contains('hidden') && !overlay.classList.contains('opacity-0')) {
+        toggleCinemaFocusMode();
+      }
+
       const playerSection = document.getElementById('playerSection');
       if (playerSection) {
         playerSection.classList.add('hidden');
@@ -1931,9 +2032,110 @@ const styles = StyleSheet.create({
 
             grid.appendChild(epCard);
           });
+
+          // Render upcoming next episodes on the left side of the cinema player
+          renderUpcomingEpisodesSidebar(data.episodes, activeEpisodeNum, seasonNum, tvId);
         }
       } catch (e) {
         console.error('Error fetching episodes:', e);
+      }
+    }
+
+    function renderUpcomingEpisodesSidebar(episodes, activeEpisodeNum, seasonNum, tvId) {
+      const upcomingList = document.getElementById('upcomingEpisodesList');
+      const upcomingTitle = document.getElementById('upcomingTitleText');
+      const upcomingSub = document.getElementById('upcomingSubtitleText');
+      
+      if (!upcomingList) return;
+      upcomingList.innerHTML = '';
+      if (upcomingTitle) upcomingTitle.innerText = 'Next Episodes';
+      if (upcomingSub) upcomingSub.innerText = `Season ${seasonNum} Queue`;
+
+      const upcomingEps = (episodes || []).filter(ep => ep.episode_number > activeEpisodeNum);
+
+      if (upcomingEps.length > 0) {
+        upcomingEps.slice(0, 6).forEach(ep => {
+          const epStill = ep.still_path ? `${TMDB_IMG_POSTER}${ep.still_path}` : 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=500&auto=format&fit=crop&q=80';
+          const upCard = document.createElement('div');
+          upCard.className = 'group/up flex lg:flex-col items-center lg:items-start gap-2.5 p-2 rounded-xl bg-slate-950/90 border border-slate-800/80 hover:border-indigo-500/50 hover:bg-slate-900 transition-all cursor-pointer shrink-0 w-64 lg:w-full';
+          
+          upCard.innerHTML = `
+            <div class="relative w-28 lg:w-full aspect-video rounded-lg overflow-hidden bg-slate-900 shrink-0">
+              <img src="${epStill}" alt="${ep.name}" loading="lazy" class="w-full h-full object-cover group-hover/up:scale-105 transition-transform duration-300">
+              <div class="absolute inset-0 bg-slate-950/30 group-hover/up:bg-slate-950/10 transition-colors flex items-center justify-center">
+                <div class="w-6 h-6 rounded-full bg-indigo-500 text-white flex items-center justify-center shadow">
+                  <svg class="w-3 h-3 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              <span class="absolute top-1 left-1 px-1.5 py-0.5 text-[8px] font-black bg-indigo-600 text-white rounded">EP ${ep.episode_number}</span>
+            </div>
+            <div class="flex-1 min-w-0 w-full">
+              <div class="flex items-center justify-between text-[11px] mb-0.5">
+                <span class="font-bold text-indigo-400">NEXT UP</span>
+                <span class="text-[10px] text-slate-400">${ep.runtime ? ep.runtime + 'm' : ''}</span>
+              </div>
+              <h4 class="text-xs font-semibold text-slate-200 truncate group-hover/up:text-indigo-300 transition-colors">${ep.name || `Episode ${ep.episode_number}`}</h4>
+              <p class="text-[10px] text-slate-400 line-clamp-1 mt-0.5">${ep.overview || 'Click to play next episode'}</p>
+            </div>
+          `;
+
+          upCard.addEventListener('click', () => {
+            playMedia(state.activeItem, seasonNum, ep.episode_number);
+          });
+
+          upcomingList.appendChild(upCard);
+        });
+      } else {
+        upcomingList.innerHTML = `<div class="py-4 text-center text-xs text-slate-400 w-full">Season finale reached! Choose next season below.</div>`;
+      }
+    }
+
+    async function renderRecommendedMoviesSidebar(item) {
+      const upcomingList = document.getElementById('upcomingEpisodesList');
+      const upcomingTitle = document.getElementById('upcomingTitleText');
+      const upcomingSub = document.getElementById('upcomingSubtitleText');
+
+      if (!upcomingList) return;
+      upcomingList.innerHTML = '<div class="text-[10px] text-slate-500 py-2">Loading recommendations...</div>';
+      if (upcomingTitle) upcomingTitle.innerText = 'Up Next Movies';
+      if (upcomingSub) upcomingSub.innerText = 'Top recommendations';
+
+      try {
+        const res = await fetch(`/api/tmdb/trending?page=1`);
+        const data = await res.json();
+        const movies = (data.results || []).filter(m => m.id !== item.id).slice(0, 5);
+        
+        upcomingList.innerHTML = '';
+        movies.forEach(m => {
+          const poster = m.backdrop_path ? `${TMDB_IMG_POSTER}${m.backdrop_path}` : (m.poster_path ? `${TMDB_IMG_POSTER}${m.poster_path}` : 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=500&auto=format&fit=crop&q=80');
+          const title = m.title || m.name || 'Movie';
+          const card = document.createElement('div');
+          card.className = 'group/up flex lg:flex-col items-center lg:items-start gap-2.5 p-2 rounded-xl bg-slate-950/90 border border-slate-800/80 hover:border-amber-500/50 hover:bg-slate-900 transition-all cursor-pointer shrink-0 w-64 lg:w-full';
+
+          card.innerHTML = `
+            <div class="relative w-28 lg:w-full aspect-video rounded-lg overflow-hidden bg-slate-900 shrink-0">
+              <img src="${poster}" alt="${title}" loading="lazy" class="w-full h-full object-cover group-hover/up:scale-105 transition-transform duration-300">
+              <div class="absolute inset-0 bg-slate-950/30 group-hover/up:bg-slate-950/10 transition-colors flex items-center justify-center">
+                <div class="w-6 h-6 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center shadow">
+                  <svg class="w-3 h-3 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              <span class="absolute top-1 left-1 px-1.5 py-0.5 text-[8px] font-bold bg-amber-500 text-slate-950 rounded">★ ${(m.vote_average || 8.0).toFixed(1)}</span>
+            </div>
+            <div class="flex-1 min-w-0 w-full">
+              <h4 class="text-xs font-semibold text-slate-200 truncate group-hover/up:text-amber-400 transition-colors">${title}</h4>
+              <p class="text-[10px] text-slate-400 line-clamp-1 mt-0.5">${m.overview || 'Click to watch'}</p>
+            </div>
+          `;
+
+          card.addEventListener('click', () => {
+            playMedia(m, 1, 1);
+          });
+
+          upcomingList.appendChild(card);
+        });
+      } catch (e) {
+        console.error('Error fetching recommendations for sidebar:', e);
       }
     }
 
@@ -1993,6 +2195,8 @@ const styles = StyleSheet.create({
           if (castSection) castSection.classList.add('hidden');
         }
       }
+
+      renderRecommendedMoviesSidebar(item);
     }
 
     function changeEpisodeOffset(offset) {

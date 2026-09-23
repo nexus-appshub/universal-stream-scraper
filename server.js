@@ -459,14 +459,19 @@ async function getWebProviderUrls(params) {
     : (isImdb ? `https://vidsrc.xyz/embed/movie?imdb=${id}` : `https://vidsrc.xyz/embed/movie?tmdb=${id}`);
 
   // Prioritize selected server cluster
-  if (serverParam === 'lambda') {
+  if (serverParam === 'hindi' || serverParam === 'delta') {
+    regularUrls.push(
+      `${vidnestBase}?server=delta`,
+      `https://vidnest.fun/allmovies/${isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`}`,
+      `https://vidsrc.sbs/embed/${isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`}`,
+      `https://player.autoembed.cc/embed/${isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`}?lang=hi`
+    );
+  } else if (serverParam === 'lambda') {
     regularUrls.push(`${vidnestBase}?server=lambda`);
   } else if (serverParam === 'gamma') {
     regularUrls.push(`${vidnestBase}?server=gamma`);
   } else if (serverParam === 'sigma') {
     regularUrls.push(`${vidnestBase}?server=sigma`);
-  } else if (serverParam === 'delta') {
-    regularUrls.push(`${vidnestBase}?server=delta`);
   } else if (serverParam === 'autoembed') {
     regularUrls.push(autoembedUrl);
   } else if (serverParam === 'vidrock') {
@@ -478,8 +483,13 @@ async function getWebProviderUrls(params) {
     regularUrls.push(`${vidnestBase}?server=flixer`);
   }
 
-  // Fallback cluster servers
-  const clusterPool = [
+  // Fallback cluster servers (For Hindi server, keep ONLY Hindi audio sources to prevent playing English streams)
+  const clusterPool = (serverParam === 'hindi' || serverParam === 'delta') ? [
+    `${vidnestBase}?server=delta`,
+    `https://vidnest.fun/allmovies/${isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`}`,
+    `https://vidsrc.sbs/embed/${isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`}`,
+    `https://player.autoembed.cc/embed/${isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`}?lang=hi`
+  ] : [
     `${vidnestBase}?server=flixer`,
     `${vidnestBase}?server=lambda`,
     `${vidnestBase}?server=gamma`,
@@ -876,10 +886,130 @@ function parseParams(query) {
   const malId = query.mal_id || query.malId;
   const anilistId = query.anilist_id || query.anilistId;
   const rawServer = query.server || query.srv || 'flixer';
-  const server = String(rawServer).replace('vidnest-', '').replace('-pro', '').replace('-vip', '').replace('-sbs', '').replace('-xyz', '').toLowerCase();
+  const server = String(rawServer).replace('vidnest-', '').replace('-pro', '').replace('-vip', '').replace('-sbs', '').replace('-xyz', '').replace('filxer', 'flixer').replace('lamda', 'lambda').toLowerCase();
   const isAnime = typeStr === 'anime' || query.isAnime === 'true' || query.is_anime === 'true' || query.genre === 'anime' || query.genre === 'animation';
 
   return { id: targetId, typeStr, isTv, season, episode, lang, malId, anilistId, title, server, isAnime };
+}
+
+// ========================================================
+// 🔐 HINDI SERVER (DELTA) CIPHER DECRYPTION & FETCH LOGIC
+// ========================================================
+const CUSTOM_CIPHER_ALPHABET = "RB0fpH8ZEyVLkv7c2i6MAJ5u3IKFDxlS1NTsnGaqmXYdUrtzjwObCgQP94hoeW+/=";
+const STD_BASE64_ALPHABET    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+
+function decodeCustomCipher(encryptedPayload) {
+  if (!encryptedPayload || typeof encryptedPayload !== 'string') return null;
+  try {
+    let stdBase64 = '';
+    for (let i = 0; i < encryptedPayload.length; i++) {
+      const char = encryptedPayload[i];
+      if (char === '=') {
+        stdBase64 += '=';
+        continue;
+      }
+      const idx = CUSTOM_CIPHER_ALPHABET.indexOf(char);
+      if (idx !== -1 && idx < 64) {
+        stdBase64 += STD_BASE64_ALPHABET[idx];
+      } else {
+        stdBase64 += char;
+      }
+    }
+    const decodedText = Buffer.from(stdBase64, 'base64').toString('utf-8');
+    try {
+      return JSON.parse(decodedText);
+    } catch (e) {
+      return decodedText;
+    }
+  } catch (err) {
+    console.error("Custom cipher decode error:", err);
+    return null;
+  }
+}
+
+async function fetchHindiVidnestDeltaStream(params) {
+  const { id, isTv, season, episode } = params;
+  const numericTmdbId = String(id).replace('tt', '');
+  
+  const nodeHosts = [
+    'https://vidnest.fun',
+    'https://new.vidnest.fun',
+    'https://api.vidnes.fun',
+    'https://vidnes.fun',
+    'https://new.vidnes.fun'
+  ];
+
+  const subPaths = isTv 
+    ? [`/allmovies/tv/${numericTmdbId}/${season}/${episode}`, `/tv/${numericTmdbId}/${season}/${episode}?server=delta`]
+    : [`/allmovies/movie/${numericTmdbId}`, `/movie/${numericTmdbId}?server=delta`];
+
+  for (const host of nodeHosts) {
+    for (const path of subPaths) {
+      const url = `${host}${path}`;
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://vidnest.fun/',
+            'Origin': 'https://vidnest.fun',
+            'Accept': 'application/json, text/plain, */*'
+          },
+          signal: AbortSignal.timeout(3000)
+        });
+
+        if (!response.ok) continue;
+
+        const contentType = response.headers.get('content-type') || '';
+        let payload = null;
+
+        if (contentType.includes('json')) {
+          payload = await response.json();
+        } else {
+          const text = await response.text();
+          try {
+            payload = JSON.parse(text);
+          } catch (e) {
+            payload = text.trim();
+          }
+        }
+
+        let data = payload;
+        if (typeof payload === 'string' && payload.length > 20) {
+          data = decodeCustomCipher(payload);
+        } else if (payload && payload.ciphertext) {
+          data = decodeCustomCipher(payload.ciphertext);
+        } else if (payload && payload.data && typeof payload.data === 'string') {
+          data = decodeCustomCipher(payload.data);
+        }
+
+        if (data) {
+          let streamUrl = null;
+          if (typeof data === 'string' && (data.includes('.m3u8') || data.includes('.mp4'))) {
+            streamUrl = data;
+          } else if (data.streams && Array.isArray(data.streams)) {
+            const first = data.streams.find(s => s.file || s.url || s.link) || data.streams[0];
+            streamUrl = first?.file || first?.url || first?.link;
+          } else if (data.sources && Array.isArray(data.sources)) {
+            const first = data.sources.find(s => s.file || s.url || s.link) || data.sources[0];
+            streamUrl = first?.file || first?.url || first?.link;
+          } else if (data.url || data.file || data.stream) {
+            streamUrl = data.url || data.file || data.stream;
+          }
+
+          if (streamUrl && (streamUrl.includes('.m3u8') || streamUrl.includes('.mp4') || streamUrl.includes('/hls/'))) {
+            return {
+              url: streamUrl,
+              ref: 'https://vidnest.fun/'
+            };
+          }
+        }
+      } catch (err) {
+        // Try next node
+      }
+    }
+  }
+
+  return null;
 }
 
 // ========================================================
@@ -909,10 +1039,9 @@ async function handleResolveStream(req, res) {
 
   const serverSlug = params.server || 'flixer';
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${serverSlug}`;
-  const generalCacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
-  // Check cache for this server or general key
-  const cached = streamCache.get(cacheKey) || streamCache.get(generalCacheKey);
+  // Check cache ONLY for this specific server slug to prevent language/server cross-contamination
+  const cached = streamCache.get(cacheKey);
   if (cached && Date.now() - cached.time < CACHE_TTL) {
     const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`;
     return res.json({
@@ -950,6 +1079,66 @@ async function handleResolveStream(req, res) {
     } catch (e) {}
   }
 
+  // ⚡ Fast direct API check for Hindi (VidNest Delta) custom cipher API
+  if (serverSlug === 'hindi' || serverSlug === 'delta') {
+    try {
+      const directHindi = await fetchHindiVidnestDeltaStream(params);
+      if (directHindi && directHindi.url) {
+        const data = { url: directHindi.url, ref: directHindi.ref, time: Date.now() };
+        streamCache.set(cacheKey, data);
+        const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(directHindi.url)}&referer=${encodeURIComponent(directHindi.ref)}`;
+        return res.json({
+          success: true,
+          isEmbed: false,
+          streamUrl: streamProxyUrl,
+          rawUrl: directHindi.url,
+          proxy_stream_url: streamProxyUrl,
+          stream_url: directHindi.url,
+          expoStreamUrl: streamProxyUrl,
+          vlcStreamUrl: streamProxyUrl,
+          server: serverSlug,
+          type: params.typeStr
+        });
+      }
+    } catch (err) {
+      console.error("Direct Hindi Delta API fetch error:", err);
+    }
+
+    // High-speed fallback: Return VidNest Delta embedded player URL so iframe loads VidNest Delta instantly
+    const deltaEmbedUrl = params.isTv 
+      ? `https://vidnest.fun/tv/${params.id}/${params.season}/${params.episode}?server=delta`
+      : `https://vidnest.fun/movie/${params.id}?server=delta`;
+
+    return res.json({
+      success: true,
+      isEmbed: true,
+      streamUrl: deltaEmbedUrl,
+      rawUrl: deltaEmbedUrl,
+      expoStreamUrl: deltaEmbedUrl,
+      vlcStreamUrl: deltaEmbedUrl,
+      server: serverSlug,
+      type: params.typeStr
+    });
+  }
+
+  // ⚡ Dedicated VidSrc SBS Server Handler
+  if (serverSlug === 'vidsrcsbs' || serverSlug === 'vidsrc-sbs') {
+    const sbsEmbedUrl = params.isTv 
+      ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
+      : `https://vidsrc.sbs/embed/movie/${params.id}`;
+
+    return res.json({
+      success: true,
+      isEmbed: true,
+      streamUrl: sbsEmbedUrl,
+      rawUrl: sbsEmbedUrl,
+      expoStreamUrl: sbsEmbedUrl,
+      vlcStreamUrl: sbsEmbedUrl,
+      server: 'vidsrcsbs',
+      type: params.typeStr
+    });
+  }
+
   const scrapeTask = (async () => {
     let acquired = false;
     try {
@@ -964,7 +1153,6 @@ async function handleResolveStream(req, res) {
       if (raceResult && raceResult.url) {
         const data = { url: raceResult.url, ref: raceResult.ref, time: Date.now() };
         streamCache.set(cacheKey, data);
-        streamCache.set(generalCacheKey, data);
         return data;
       }
 
@@ -976,7 +1164,6 @@ async function handleResolveStream(req, res) {
           if (fallbackResult && fallbackResult.url) {
             const data = { url: fallbackResult.url, ref: fallbackResult.ref, time: Date.now() };
             streamCache.set(cacheKey, data);
-            streamCache.set(generalCacheKey, data);
             return data;
           }
         }
@@ -1554,6 +1741,17 @@ app.get('/api/servers', async (req, res) => {
       description: 'Ultra fast VidNest Flixer cluster with adaptive bitrate (Direct M3U8 / Expo)'
     },
     {
+      id: 'hindi',
+      name: 'VidNest (Hindi)',
+      provider: 'VidNest',
+      type: 'stream',
+      badge: 'Hindi Audio (Delta)',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'VidNest Delta sub-server with Hindi audio & dubbed stream (Direct M3U8 / Expo)'
+    },
+    {
       id: 'lambda',
       name: 'VidNest (Lambda)',
       provider: 'VidNest',
@@ -1629,6 +1827,17 @@ app.get('/api/servers', async (req, res) => {
       status: 'active',
       isDefault: false,
       description: 'High availability media streaming (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'vidsrcsbs',
+      name: 'VidSrc (SBS Pro)',
+      provider: 'VidSrc.SBS',
+      type: 'stream',
+      badge: 'Multi-Lang',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'VidSrc SBS dedicated streaming node with Multi-Lang Audio & Subtitles'
     },
     {
       id: 'vidsrc',
