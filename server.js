@@ -13,12 +13,13 @@ const app = express();
 app.set('trust proxy', 1);
 
 function getHostUrl(req) {
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-  let host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
+  if (!req) return '';
+  const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : (req.protocol || 'https'));
+  let host = req.headers['x-forwarded-host'] || req.get('host') || '';
   if (host.includes(',')) {
     host = host.split(',')[0].trim();
   }
-  return `${proto}://${host}`;
+  return host ? `${proto}://${host}` : '';
 }
 
 // ========================================================
@@ -139,6 +140,9 @@ function startKeepAliveEngine() {
 }
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS', 'HEAD'], allowedHeaders: '*' }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -443,23 +447,54 @@ async function getWebProviderUrls(params) {
     urlsTried: []
   };
 
-  // Build regular TV/Movie URLs (instant)
-  if (isTv) {
-    regularUrls.push(
-      `https://vidnest.fun/tv/${id}/${season}/${episode}`,
-      `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}`,
-      `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`,
-      `https://vidrock.net/embed/tv/${id}/${season}/${episode}`
-    );
+  // Build regular TV/Movie URLs with cluster server support
+  const isImdb = String(id).startsWith('tt');
+  const serverParam = (params.server || 'flixer').toLowerCase();
+  const vidnestBase = isTv ? `https://vidnest.fun/tv/${id}/${season}/${episode}` : `https://vidnest.fun/movie/${id}`;
+  const autoembedUrl = isTv ? `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}` : `https://player.autoembed.cc/embed/movie/${id}`;
+  const vidsrcSbsUrl = isTv ? `https://vidsrc.sbs/embed/tv/${id}/${season}/${episode}` : `https://vidsrc.sbs/embed/movie/${id}`;
+  const vidrockUrl = isTv ? `https://vidrock.net/embed/tv/${id}/${season}/${episode}` : `https://vidrock.net/embed/movie/${id}`;
+  const vidsrcXyzUrl = isTv 
+    ? (isImdb ? `https://vidsrc.xyz/embed/tv?imdb=${id}&season=${season}&episode=${episode}` : `https://vidsrc.xyz/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`)
+    : (isImdb ? `https://vidsrc.xyz/embed/movie?imdb=${id}` : `https://vidsrc.xyz/embed/movie?tmdb=${id}`);
+
+  // Prioritize selected server cluster
+  if (serverParam === 'lambda') {
+    regularUrls.push(`${vidnestBase}?server=lambda`);
+  } else if (serverParam === 'gamma') {
+    regularUrls.push(`${vidnestBase}?server=gamma`);
+  } else if (serverParam === 'sigma') {
+    regularUrls.push(`${vidnestBase}?server=sigma`);
+  } else if (serverParam === 'delta') {
+    regularUrls.push(`${vidnestBase}?server=delta`);
+  } else if (serverParam === 'autoembed') {
+    regularUrls.push(autoembedUrl);
+  } else if (serverParam === 'vidrock') {
+    regularUrls.push(vidrockUrl);
+  } else if (serverParam === 'vidsrc') {
+    regularUrls.push(vidsrcSbsUrl, vidsrcXyzUrl);
   } else {
-    regularUrls.push(
-      `https://vidnest.fun/movie/${id}`,
-      `https://player.autoembed.cc/embed/movie/${id}`,
-      `https://vidsrc.sbs/embed/movie/${id}`,
-      `https://vidrock.net/embed/movie/${id}`,
-      `https://vidsrc.xyz/embed/movie?tmdb=${id}`
-    );
+    // Default flixer
+    regularUrls.push(`${vidnestBase}?server=flixer`);
+  }
+
+  // Fallback cluster servers
+  const clusterPool = [
+    `${vidnestBase}?server=flixer`,
+    `${vidnestBase}?server=lambda`,
+    `${vidnestBase}?server=gamma`,
+    `${vidnestBase}?server=sigma`,
+    `${vidnestBase}?server=delta`,
+    vidnestBase,
+    autoembedUrl,
+    vidrockUrl,
+    vidsrcSbsUrl,
+    vidsrcXyzUrl
+  ];
+  for (const cUrl of clusterPool) {
+    if (!regularUrls.includes(cUrl)) {
+      regularUrls.push(cUrl);
+    }
   }
 
   // If the user explicitly requested Anime OR we want to build anime URLs:
@@ -567,10 +602,14 @@ async function fastScrape(browser, targetUrl, sharedState) {
         await page.close().catch(() => {});
         return resolve(null);
       }
-      // পেজ লোড হওয়ার জন্য ৫ সেকেন্ড সময় দিই
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 5000 });
+      // পেজ লোড হওয়ার জন্য ১০ সেকেন্ড সময় দিই
+      try {
+        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      } catch (navErr) {
+        // Navigation timeout or network error - page may still have loaded frames
+      }
       
-      // Multi-frame play button click trigger to support deep-nested player iframes (Anikoto, Vidnest, Megacloud, etc.)
+      // Multi-frame play button click trigger to support deep-nested player iframes (Vidnest, Vidrock, Autoembed, etc.)
       const clickPlayAcrossFrames = async () => {
         if (localResolved || (sharedState && sharedState.resolved)) return;
         const frames = page.frames();
@@ -581,36 +620,38 @@ async function fastScrape(browser, targetUrl, sharedState) {
                 'video', 'button', '#play', '.play-btn', '.jw-display-icon-container', 
                 '.vjs-big-play-button', '.play-icon', '#player', '.iframe-player',
                 '.play_btn', '.playButton', '.play-button', '[aria-label="Play"]',
-                '.play', '.clickable', '.plyr__control--overlaid'
+                '.play', '.clickable', '.plyr__control--overlaid', 'div[role="button"]'
               ];
               for (const selector of selectors) {
-                const el = document.querySelector(selector);
-                if (el) {
-                  el.click();
-                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                }
+                const els = document.querySelectorAll(selector);
+                els.forEach(el => {
+                  try {
+                    el.click();
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                  } catch (e) {}
+                });
               }
             });
           } catch (e) {}
         }
       };
 
-      // Poll and click across frames every 400ms for 3.2 seconds
-      for (let i = 0; i < 8; i++) {
+      // Poll and click across frames every 350ms
+      for (let i = 0; i < 10; i++) {
         if (localResolved || (sharedState && sharedState.resolved)) break;
         await clickPlayAcrossFrames();
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 350));
       }
     } catch (e) {}
 
-    // টোটাল স্ক্র্যাপার টাইমআউট ৫ সেকেন্ড করা হলো
+    // টোটাল স্ক্র্যাপার টাইমআউট ৮.৫ সেকেন্ড করা হলো
     setTimeout(async () => {
       if (!localResolved) {
         localResolved = true;
         await page.close().catch(() => {});
         resolve(null);
       }
-    }, 5500);
+    }, 8500);
   });
 }
 
@@ -834,14 +875,15 @@ function parseParams(query) {
   const lang = (query.lang || (query.dub === 'true' ? 'dub' : 'sub')).toLowerCase();
   const malId = query.mal_id || query.malId;
   const anilistId = query.anilist_id || query.anilistId;
-  const server = query.server || 'AwsPly';
+  const rawServer = query.server || query.srv || 'flixer';
+  const server = String(rawServer).replace('vidnest-', '').replace('-pro', '').replace('-vip', '').replace('-sbs', '').replace('-xyz', '').toLowerCase();
   const isAnime = typeStr === 'anime' || query.isAnime === 'true' || query.is_anime === 'true' || query.genre === 'anime' || query.genre === 'animation';
 
   return { id: targetId, typeStr, isTv, season, episode, lang, malId, anilistId, title, server, isAnime };
 }
 
 // ========================================================
-// ৪. মেইন RESOLVER API
+// ৪. মেইন RESOLVER API (100% Direct M3U8 / Expo Stream - No Iframe)
 // ========================================================
 async function handleResolveStream(req, res) {
   const params = parseParams(req.query);
@@ -852,9 +894,12 @@ async function handleResolveStream(req, res) {
     const dubEmbed = await resolveDubStream(params);
     return res.json({
       success: true,
-      isEmbed: true,
+      isEmbed: false,
       streamUrl: dubEmbed,
-      embedUrl: dubEmbed,
+      rawUrl: dubEmbed,
+      expoStreamUrl: dubEmbed,
+      vlcStreamUrl: dubEmbed,
+      server: params.server,
       lang: 'dub',
       type: params.typeStr,
       season: params.season,
@@ -862,17 +907,24 @@ async function handleResolveStream(req, res) {
     });
   }
 
-  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
+  const serverSlug = params.server || 'flixer';
+  const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${serverSlug}`;
+  const generalCacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
-  if (streamCache.has(cacheKey)) {
-    const cached = streamCache.get(cacheKey);
+  // Check cache for this server or general key
+  const cached = streamCache.get(cacheKey) || streamCache.get(generalCacheKey);
+  if (cached && Date.now() - cached.time < CACHE_TTL) {
+    const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`;
     return res.json({
       success: true,
       isEmbed: false,
-      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`,
+      streamUrl: streamProxyUrl,
       rawUrl: cached.url,
-      proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`,
+      proxy_stream_url: streamProxyUrl,
       stream_url: cached.url,
+      expoStreamUrl: streamProxyUrl,
+      vlcStreamUrl: streamProxyUrl,
+      server: serverSlug,
       type: params.typeStr
     });
   }
@@ -881,13 +933,17 @@ async function handleResolveStream(req, res) {
     try {
       const result = await pendingScrapes.get(cacheKey);
       if (result) {
+        const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`;
         return res.json({
           success: true,
           isEmbed: false,
-          streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
+          streamUrl: streamProxyUrl,
           rawUrl: result.url,
-          proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`,
+          proxy_stream_url: streamProxyUrl,
           stream_url: result.url,
+          expoStreamUrl: streamProxyUrl,
+          vlcStreamUrl: streamProxyUrl,
+          server: serverSlug,
           type: params.typeStr
         });
       }
@@ -903,23 +959,24 @@ async function handleResolveStream(req, res) {
       const { urls, debugInfo, fetchAnimeUrlsFn, animeUrls } = await getWebProviderUrls(params);
       activeDebugInfo = debugInfo;
       
-      // ১. সমান্তরাল রেজোলিউশন রেসার (Parallel Resolution Racer) দিয়ে একসাথে সব লিংক স্ক্র্যাপ করি (ম্যাক্সিমাম স্পিড!)
+      // ১. সমান্তরাল রেজোলিউশন রেসার দিয়ে স্ক্র্যাপ করি
       const raceResult = await raceScrapeUrls(browser, urls);
       if (raceResult && raceResult.url) {
         const data = { url: raceResult.url, ref: raceResult.ref, time: Date.now() };
         streamCache.set(cacheKey, data);
+        streamCache.set(generalCacheKey, data);
         return data;
       }
 
-      // ২. যদি কোনো স্ট্রিম না পাওয়া যায় এবং এটি এনিমে ডিক্লেয়ার করা না হয়ে থাকে, তবে এনিমে ফলব্যাক লোড করি
+      // ২. এনিমে ফলব্যাক লোড
       if (!params.isAnime) {
-        console.log("No regular stream found. Trying lazy anime fallback search...");
         await fetchAnimeUrlsFn();
         if (animeUrls && animeUrls.length > 0) {
           const fallbackResult = await raceScrapeUrls(browser, animeUrls);
           if (fallbackResult && fallbackResult.url) {
             const data = { url: fallbackResult.url, ref: fallbackResult.ref, time: Date.now() };
             streamCache.set(cacheKey, data);
+            streamCache.set(generalCacheKey, data);
             return data;
           }
         }
@@ -941,29 +998,46 @@ async function handleResolveStream(req, res) {
   const finalResult = await scrapeTask;
 
   if (finalResult) {
+    const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`;
     return res.json({
       success: true,
       isEmbed: false,
-      streamUrl: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
+      streamUrl: streamProxyUrl,
       rawUrl: finalResult.url,
-      proxy_stream_url: `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(finalResult.url)}&referer=${encodeURIComponent(finalResult.ref)}`,
+      proxy_stream_url: streamProxyUrl,
       stream_url: finalResult.url,
+      expoStreamUrl: streamProxyUrl,
+      vlcStreamUrl: streamProxyUrl,
+      server: serverSlug,
       type: params.typeStr,
       debugInfo: activeDebugInfo
     });
   }
 
-  const fallbackEmbed = params.isTv 
-    ? `https://player.autoembed.cc/embed/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://player.autoembed.cc/embed/movie/${params.id}`;
+  // Fallback: Check if general cache has another server's stream
+  const fallbackCached = streamCache.get(generalCacheKey);
+  if (fallbackCached) {
+    const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(fallbackCached.url)}&referer=${encodeURIComponent(fallbackCached.ref)}`;
+    return res.json({
+      success: true,
+      isEmbed: false,
+      streamUrl: streamProxyUrl,
+      rawUrl: fallbackCached.url,
+      proxy_stream_url: streamProxyUrl,
+      stream_url: fallbackCached.url,
+      expoStreamUrl: streamProxyUrl,
+      vlcStreamUrl: streamProxyUrl,
+      server: serverSlug,
+      type: params.typeStr
+    });
+  }
 
-  return res.json({
-    success: true,
-    isEmbed: true,
-    streamUrl: fallbackEmbed,
-    embedUrl: fallbackEmbed,
-    proxy_stream_url: fallbackEmbed,
-    stream_url: fallbackEmbed,
+  // If no stream could be captured directly from this cluster, return informative direct stream proxy
+  return res.status(404).json({
+    success: false,
+    isEmbed: false,
+    error: 'Stream could not be scraped from this mirror. Please switch to another server (e.g. Flixer, Lambda, or Gamma).',
+    server: serverSlug,
     type: params.typeStr,
     debugInfo: activeDebugInfo
   });
@@ -1141,7 +1215,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     const targetUrlObj = new URL(cleanUrl);
     const domain = targetUrlObj.origin;
     const ref = referer ? decodeURIComponent(referer) : domain;
-    const proxyBase = `${getHostUrl(req)}/api/stream-proxy`;
+    const proxyBase = '/api/stream-proxy';
 
     // Extract and parse custom headers encoded in query parameter if present
     const headersParam = req.query.headers || targetUrlObj.searchParams.get('headers');
@@ -1336,6 +1410,250 @@ app.get(['/api/stream-proxy', '/api/proxy-stream'], async (req, res) => {
 });
 
 // ========================================================
+// 🎬 TMDB API PROXY ENDPOINTS (CORS-Bypassed Gateway)
+// ========================================================
+const TMDB_API_KEY = process.env.TMDB_API_KEY || 'a359b11d9aa4c4803d25ef86cf7fb19c';
+const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+
+async function fetchTmdb(endpoint, queryParams = {}) {
+  const params = new URLSearchParams({
+    api_key: TMDB_API_KEY,
+    ...queryParams
+  });
+  const url = `${TMDB_BASE_URL}${endpoint}?${params.toString()}`;
+  const response = await axios.get(url, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+    timeout: 12000
+  });
+  return response.data;
+}
+
+app.get('/api/tmdb/trending', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const timeWindow = req.query.time || 'day';
+    const data = await fetchTmdb(`/trending/all/${timeWindow}`, { page });
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tmdb/popular-movies', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const data = await fetchTmdb('/movie/popular', { page });
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tmdb/popular-tv', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const data = await fetchTmdb('/tv/popular', { page });
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tmdb/top-rated', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const data = await fetchTmdb('/movie/top_rated', { page });
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tmdb/discover', async (req, res) => {
+  try {
+    const type = req.query.type === 'tv' ? 'tv' : 'movie';
+    const genre = req.query.genre || '';
+    const page = parseInt(req.query.page) || 1;
+    const params = { page, sort_by: 'popularity.desc' };
+    if (genre) params.with_genres = genre;
+    const data = await fetchTmdb(`/discover/${type}`, params);
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tmdb/search', async (req, res) => {
+  try {
+    const query = req.query.query || '';
+    const page = parseInt(req.query.page) || 1;
+    if (!query) return res.json({ results: [], page: 1, total_pages: 0 });
+    const data = await fetchTmdb('/search/multi', { query, page });
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tmdb/details', async (req, res) => {
+  try {
+    const id = req.query.id;
+    const type = req.query.type === 'tv' ? 'tv' : 'movie';
+    if (!id) return res.status(400).json({ error: 'Missing ID' });
+    const data = await fetchTmdb(`/${type}/${id}`, { append_to_response: 'credits,recommendations,similar,videos' });
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tmdb/tv-season', async (req, res) => {
+  try {
+    const id = req.query.id;
+    const season = parseInt(req.query.season) || 1;
+    if (!id) return res.status(400).json({ error: 'Missing ID' });
+    const data = await fetchTmdb(`/tv/${id}/season/${season}`, {});
+    res.json(data);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+// ========================================================
+// 🎛️ MULTI-SERVER REGISTRY API (VidNest & Cloud Mirrors)
+// ========================================================
+app.get('/api/servers', async (req, res) => {
+  const { id, type = 'movie', season = '1', episode = '1', title = '' } = req.query;
+  if (!id) return res.status(400).json({ success: false, error: 'Missing id parameter' });
+  const isTv = type === 'tv' || type === 'series';
+  const hostUrl = getHostUrl(req);
+  const cacheKey = `${id}_${isTv ? 'tv' : 'movie'}_${season}_${episode}`;
+
+  // Check if direct scraped M3U8 is already available in cache
+  let directM3U8Url = null;
+  const cachedStream = streamCache.get(cacheKey);
+  if (cachedStream && Date.now() - cachedStream.time < CACHE_TTL) {
+    directM3U8Url = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cachedStream.url)}&referer=${encodeURIComponent(cachedStream.ref)}`;
+  }
+
+  const isImdb = String(id).startsWith('tt');
+  const vidnestPath = isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`;
+  const autoembedPath = isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`;
+  const vidsrcPath = isTv ? `tv/${id}/${season}/${episode}` : `movie/${id}`;
+
+  const servers = [
+    {
+      id: 'flixer',
+      name: 'VidNest (Flixer)',
+      provider: 'VidNest',
+      type: 'stream',
+      badge: 'Primary HD',
+      quality: '1080p',
+      status: 'active',
+      isDefault: true,
+      description: 'Ultra fast VidNest Flixer cluster with adaptive bitrate (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'lambda',
+      name: 'VidNest (Lambda)',
+      provider: 'VidNest',
+      type: 'stream',
+      badge: 'Fast VIP',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'High-speed cloud server with instant start (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'gamma',
+      name: 'VidNest (Gamma)',
+      provider: 'VidNest',
+      type: 'stream',
+      badge: 'Cloud Global',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'Primary VidNest global distribution node (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'sigma',
+      name: 'VidNest (Sigma)',
+      provider: 'VidNest',
+      type: 'stream',
+      badge: 'Multi-Audio',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'Multi-language audio tracks & subtitle selector (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'delta',
+      name: 'VidNest (Delta)',
+      provider: 'VidNest',
+      type: 'stream',
+      badge: 'Direct CDN',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'Direct stream CDN node (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'anikoto',
+      name: 'VidNest (Anime)',
+      provider: 'VidNest',
+      type: 'stream',
+      badge: 'Anime Dub/Sub',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'VidNest specialized anime & animation stream cluster'
+    },
+    {
+      id: 'autoembed',
+      name: 'AutoEmbed VIP',
+      provider: 'AutoEmbed',
+      type: 'stream',
+      badge: 'VIP Server',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'Ultra stable multi-source cloud fallback (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'vidrock',
+      name: 'VidRock Mirror',
+      provider: 'VidRock',
+      type: 'stream',
+      badge: 'Fast Mirror',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'High availability media streaming (Direct M3U8 / Expo)'
+    },
+    {
+      id: 'vidsrc',
+      name: 'VidSrc Multi',
+      provider: 'VidSrc',
+      type: 'stream',
+      badge: 'Multi-Lang',
+      quality: '1080p',
+      status: 'active',
+      isDefault: false,
+      description: 'Multi-lingual audio & subtitle streams (Direct M3U8 / Expo)'
+    }
+  ];
+
+  res.json({
+    success: true,
+    target: { id, type: isTv ? 'tv' : 'movie', season, episode, title },
+    hasDirectM3u8: !!directM3U8Url,
+    directM3U8Url,
+    activeServerId: 'flixer',
+    servers
+  });
+});
+
+// ========================================================
 // ⏰ 24/7 KEEP-ALIVE & HEALTH ENDPOINTS
 // ========================================================
 app.get('/ping', (req, res) => {
@@ -1425,9 +1743,13 @@ function formatUptime(seconds) {
 }
 
 // ========================================================
-// 🖥️ INTERACTIVE DASHBOARD & 24/7 MONITOR
+// 🖥️ MOVIE WEBSITE & 24/7 MONITOR ROUTES
 // ========================================================
 app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get(['/monitor', '/keepalive', '/api/keepalive/dashboard'], (req, res) => {
   const hostUrl = getHostUrl(req);
   const targetUrl = getActiveKeepAliveUrl();
   const uptimeSec = Math.floor((Date.now() - keepAliveState.startTime) / 1000);

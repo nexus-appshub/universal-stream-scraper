@@ -1,0 +1,1618 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100 scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CineStream Pro - Stream Movies & TV Series 24/7</title>
+  <meta name="description" content="Watch unlimited Movies and TV Series with multi-server streaming, HLS video player, and 24/7 high availability.">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857'
+            }
+          },
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          },
+          animation: {
+            'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            'spin-slow': 'spin 3s linear infinite'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- Hls.js for Direct Master M3U8 Native Playback -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+
+  <style>
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #020617; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    
+    .aspect-poster { aspect-ratio: 2 / 3; }
+    
+    .hero-gradient {
+      background: linear-gradient(0deg, #020617 0%, rgba(2, 6, 23, 0.85) 30%, rgba(2, 6, 23, 0.3) 70%, rgba(2, 6, 23, 0.6) 100%),
+                  linear-gradient(90deg, #020617 0%, rgba(2, 6, 23, 0.9) 35%, rgba(2, 6, 23, 0.2) 100%);
+    }
+
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(16, 185, 129, 0.3); border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(16, 185, 129, 0.7); }
+
+    .line-clamp-3 {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body class="min-h-full flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-emerald-500 selection:text-slate-950">
+
+  <!-- ========================================== -->
+  <!-- 🧭 STICKY TOP NAVBAR (Edge-to-Edge Glass) -->
+  <!-- ========================================== -->
+  <header class="sticky top-0 z-50 w-full border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-xl transition-all">
+    <div class="w-full px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      
+      <!-- Brand Logo -->
+      <div class="flex items-center gap-6">
+        <a href="#" onclick="handleLogoClick(event)" class="flex items-center gap-3 group">
+          <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 p-0.5 shadow-lg shadow-emerald-500/20 group-hover:shadow-emerald-500/40 transition-all">
+            <div class="h-full w-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+              <svg class="w-5 h-5 text-emerald-400 ml-0.5 group-hover:scale-110 transition-transform" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xl font-black tracking-tight text-white group-hover:text-emerald-400 transition-colors">CineStream</span>
+              <span class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded">PRO</span>
+            </div>
+          </div>
+        </a>
+
+        <!-- Desktop Quick Nav Links -->
+        <nav class="hidden md:flex items-center gap-1 text-sm font-semibold text-slate-300">
+          <button onclick="setCategory('trending', '🔥 Trending')" class="nav-tab px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800/60 transition text-emerald-400 bg-slate-800/80" data-cat="trending">Trending</button>
+          <button onclick="setCategory('movie', '🎬 Movies')" class="nav-tab px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800/60 transition" data-cat="movie">Movies</button>
+          <button onclick="setCategory('tv', '📺 TV Series')" class="nav-tab px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800/60 transition" data-cat="tv">Series</button>
+          <button onclick="setCategory('top_rated', '⭐ Top Rated')" class="nav-tab px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800/60 transition" data-cat="top_rated">Top Rated</button>
+          <button onclick="setCategory('anime', '🎌 Anime')" class="nav-tab px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800/60 transition" data-cat="anime">Anime</button>
+        </nav>
+      </div>
+
+        <!-- Live Search -->
+        <div class="relative w-48 sm:w-64 md:w-80">
+          <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+          </div>
+          <input 
+            type="text" 
+            id="searchInput" 
+            placeholder="Search movies, series..." 
+            class="w-full pl-9 pr-8 py-1.5 text-sm bg-slate-900/90 border border-slate-800 focus:border-emerald-500 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 text-white placeholder-slate-500 transition shadow-inner"
+            autocomplete="off"
+          >
+          <button id="searchClearBtn" onclick="clearSearch()" class="hidden absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-white">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ========================================== -->
+  <!-- 📺 CINEMA PLAYER SECTION (Plays on Click) -->
+  <!-- ========================================== -->
+  <section id="playerSection" class="hidden w-full bg-black border-b border-slate-800/80 transition-all duration-500 relative">
+    <div class="w-full max-w-[1700px] mx-auto p-3 sm:p-5 lg:p-8">
+      
+      <!-- Player Header: Title & Close -->
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+        <div class="flex items-center gap-3">
+          <div class="h-8 w-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z"/>
+            </svg>
+          </div>
+          <div>
+            <h2 id="playerTitle" class="text-lg sm:text-xl font-bold text-white tracking-tight">Now Playing</h2>
+            <p id="playerSubtitle" class="text-xs text-slate-400 font-medium">Auto streaming on high-speed cloud</p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <!-- Prev / Next Episode Buttons (For Series) -->
+          <div id="seriesQuickNav" class="hidden flex items-center gap-1.5 mr-2">
+            <button id="btnPrevEp" onclick="changeEpisodeOffset(-1)" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+              <span>Prev Ep</span>
+            </button>
+            <span id="quickEpIndicator" class="text-xs font-mono text-emerald-400 px-2 font-bold">S1:E1</span>
+            <button id="btnNextEp" onclick="changeEpisodeOffset(1)" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1">
+              <span>Next Ep</span>
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+
+          <!-- Close Player Button -->
+          <button onclick="closePlayer()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition" title="Close Player">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ========================================== -->
+      <!-- 📐 SPLIT LAYOUT (Non-Fullscreen): 1/3 Left (Selector) + 2/3 Right (Player & Servers) -->
+      <!-- ========================================== -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+
+        <!-- ========================================== -->
+        <!-- 📑 LEFT COLUMN: 1/3 (4 of 12) - SEASON & EPISODE SELECTOR (On Same Line as Player) -->
+        <!-- ========================================== -->
+        <div id="playerLeftSidebar" class="lg:col-span-4 order-2 lg:order-1 flex flex-col gap-4">
+          
+          <!-- TV Series Season & Episode Selector Container -->
+          <div id="seriesSelectorContainer" class="flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-4 shadow-xl">
+            <div class="flex items-center justify-between gap-3 mb-3.5 pb-3 border-b border-slate-800">
+              <div class="flex items-center gap-2.5">
+                <div class="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3 class="text-sm font-bold text-white">Season & Episodes</h3>
+                  <p class="text-[11px] text-slate-400">Click any episode to stream</p>
+                </div>
+              </div>
+
+              <!-- Season Selector Dropdown -->
+              <div class="flex items-center gap-1.5">
+                <label class="text-[11px] font-semibold text-slate-400">Season:</label>
+                <select id="seasonSelect" onchange="onSeasonChange(this.value)" class="px-2.5 py-1 text-xs font-bold bg-slate-950 border border-slate-700 text-emerald-400 rounded-xl focus:outline-none focus:border-emerald-500">
+                  <!-- Seasons populated dynamically -->
+                </select>
+              </div>
+            </div>
+
+            <!-- Episodes List (Scrollable, 1-col cards fitting the 1/3 sidebar) -->
+            <div id="episodesGrid" class="flex flex-col gap-2 max-h-[540px] lg:max-h-[620px] overflow-y-auto pr-1.5 custom-scrollbar">
+              <!-- Episodes populated dynamically -->
+            </div>
+          </div>
+
+          <!-- Movie Info Sidebar (Displayed when playing Movie instead of Series) -->
+          <div id="movieInfoSidebar" class="hidden flex flex-col rounded-2xl bg-slate-900/90 border border-slate-800 p-4 shadow-xl">
+            <div class="flex items-center gap-3 pb-3 border-b border-slate-800">
+              <div class="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-bold text-white uppercase tracking-wider">Movie Information</h3>
+                <p id="movieSidebarYearGenre" class="text-[11px] text-slate-400">Full Movie • HD 1080p</p>
+              </div>
+            </div>
+            <div class="mt-3 space-y-3 overflow-y-auto max-h-[500px] pr-1 custom-scrollbar">
+              <div class="relative aspect-video rounded-xl overflow-hidden bg-slate-950 border border-slate-800">
+                <img id="movieSidebarPoster" src="" alt="" class="w-full h-full object-cover">
+                <div class="absolute bottom-2 left-2 px-2 py-0.5 text-[10px] font-bold bg-slate-950/80 text-amber-400 rounded border border-amber-500/30 backdrop-blur flex items-center gap-1">
+                  <svg class="w-3 h-3 fill-current" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                  <span id="movieSidebarRating">8.5</span>
+                </div>
+              </div>
+              <div>
+                <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wide mb-1">Synopsis</h4>
+                <p id="movieSidebarOverview" class="text-xs text-slate-300 leading-relaxed"></p>
+              </div>
+              <!-- 👥 TOP CASTS SECTION IN SYNOPSIS CARD -->
+              <div id="movieSidebarCastSection" class="pt-2 border-t border-slate-800/80">
+                <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>
+                  </svg>
+                  <span>Top Cast</span>
+                </h4>
+                <div id="movieSidebarCastList" class="flex items-center gap-2.5 overflow-x-auto pb-1.5 custom-scrollbar">
+                  <!-- Cast loaded dynamically -->
+                </div>
+              </div>
+              <div class="pt-2 border-t border-slate-800/80 flex flex-wrap gap-2">
+                <span class="px-2 py-0.5 text-[10px] font-semibold bg-slate-800 text-slate-300 rounded">Full HD 1080p</span>
+                <span class="px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded">Direct Master Stream</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ========================================== -->
+        <!-- 📺 RIGHT COLUMN: 2/3 (8 of 12) - VIDEO PLAYER FRAME & BELOW: SERVER SELECTION -->
+        <!-- ========================================== -->
+        <div id="playerRightColumn" class="lg:col-span-8 order-1 lg:order-2 flex flex-col gap-4">
+          
+          <!-- Video Container (100% Iframe-Free & Sandbox-Free Native Player Frame) -->
+          <div class="relative w-full aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl border border-slate-800">
+            <!-- Direct Native Hls.js / Expo-Compatible Video Player (NO IFRAME!) -->
+            <video 
+              id="hlsVideoPlayer" 
+              class="w-full h-full bg-black absolute inset-0 z-10" 
+              controls 
+              playsinline 
+              autoplay
+            ></video>
+
+            <!-- Clean Loading Overlay (No technical text) -->
+            <div id="playerLoading" class="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center z-30 pointer-events-none transition-opacity duration-300">
+              <div class="relative w-12 h-12">
+                <div class="w-12 h-12 rounded-full border-3 border-slate-800 border-t-emerald-500 animate-spin"></div>
+                <div class="absolute inset-0 flex items-center justify-center text-emerald-400">
+                  <svg class="w-5 h-5 animate-pulse" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              <p id="playerLoadingText" class="mt-3 text-xs font-semibold text-slate-300">Loading stream...</p>
+            </div>
+          </div>
+
+          <!-- ========================================== -->
+          <!-- 🎛️ MULTI-SERVER SELECTOR BAR (Green Marked Active, Yellow Marked Playable) -->
+          <!-- Placed DIRECTLY below the player frame as requested! -->
+          <!-- ========================================== -->
+          <div id="serverSection" class="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+                </svg>
+                <span class="text-sm font-bold text-white uppercase tracking-wider">Available Servers:</span>
+                <span class="text-xs text-slate-400">(Active in <span class="text-emerald-400 font-bold">GREEN</span>, Playable streams in <span class="text-amber-400 font-bold">YELLOW</span>)</span>
+              </div>
+
+              <div class="flex items-center gap-2 text-xs">
+                <span class="text-slate-400">Status:</span>
+                <span class="flex items-center gap-1 text-emerald-400 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Ready
+                </span>
+              </div>
+            </div>
+
+            <!-- Dynamic Server Buttons List -->
+            <div id="serversList" class="flex flex-wrap gap-2 pt-1">
+              <!-- Generated via Javascript with Green Marked Active & Yellow Playable Servers -->
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ========================================== -->
+  <!-- 🌟 EDGE-TO-EDGE HERO BANNER -->
+  <!-- ========================================== -->
+  <section id="heroSection" class="relative w-full h-[560px] sm:h-[620px] md:h-[680px] lg:h-[720px] overflow-hidden bg-slate-950">
+    <!-- Backdrop Image -->
+    <div id="heroBackdrop" class="absolute inset-0 bg-cover bg-center transition-all duration-1000 transform scale-105"></div>
+    
+    <!-- Hero Gradient Overlays -->
+    <div class="absolute inset-0 hero-gradient"></div>
+
+    <!-- Hero Content -->
+    <div class="relative w-full h-full max-w-[1700px] mx-auto px-4 sm:px-6 lg:px-12 flex flex-col justify-end pb-16 sm:pb-20 z-10">
+      <div class="max-w-3xl space-y-4">
+        
+        <!-- Badges: Quality, Rating, Year -->
+        <div class="flex flex-wrap items-center gap-2.5">
+          <span id="heroTypeBadge" class="px-2.5 py-1 text-xs font-bold uppercase tracking-wider bg-emerald-500 text-slate-950 rounded-md shadow-md">Movie</span>
+          <span id="heroQualityBadge" class="px-2.5 py-1 text-xs font-bold uppercase tracking-wider bg-slate-900/80 text-emerald-400 border border-emerald-500/30 rounded-md backdrop-blur-md">4K ULTRA HD</span>
+          <span class="flex items-center gap-1 px-2.5 py-1 text-xs font-bold bg-slate-900/80 text-amber-400 border border-amber-500/30 rounded-md backdrop-blur-md">
+            <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+            <span id="heroRating">8.5</span>
+          </span>
+          <span id="heroYear" class="text-xs font-semibold text-slate-300 px-2 py-1 bg-slate-900/60 rounded-md">2026</span>
+          <span id="heroGenres" class="text-xs text-slate-300 hidden sm:inline-block">Action • Thriller • Sci-Fi</span>
+        </div>
+
+        <!-- Title -->
+        <h1 id="heroTitle" class="text-3xl sm:text-5xl lg:text-6xl font-black text-white tracking-tight leading-tight drop-shadow-lg">
+          Loading Trending Hits...
+        </h1>
+
+        <!-- Overview -->
+        <p id="heroOverview" class="text-sm sm:text-base text-slate-300 line-clamp-3 leading-relaxed max-w-2xl drop-shadow">
+          Experience cinema-grade entertainment with zero buffering and seamless multi-server stream switching.
+        </p>
+
+        <!-- Hero Buttons -->
+        <div class="flex flex-wrap items-center gap-3 pt-2">
+          <button 
+            id="heroPlayBtn" 
+            onclick="playCurrentHero()"
+            class="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-bold text-sm sm:text-base flex items-center gap-2.5 shadow-xl shadow-emerald-500/25 hover:shadow-emerald-500/40 hover:scale-105 transition-all"
+          >
+            <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <span>Play Now</span>
+          </button>
+
+          <button 
+            id="heroInfoBtn" 
+            onclick="openCurrentHeroInfo()"
+            class="px-5 py-3 rounded-xl bg-slate-900/80 hover:bg-slate-800/90 text-white font-semibold text-sm sm:text-base border border-slate-700/80 backdrop-blur-md flex items-center gap-2 hover:border-slate-500 transition-all"
+          >
+            <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>Details</span>
+          </button>
+
+          <!-- Slider Controls -->
+          <div class="flex items-center gap-1.5 ml-auto">
+            <button onclick="prevHeroSlide()" class="p-2 rounded-xl bg-slate-900/60 hover:bg-slate-800 text-white border border-slate-800 backdrop-blur-md transition" title="Previous Slide">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            </button>
+            <button onclick="nextHeroSlide()" class="p-2 rounded-xl bg-slate-900/60 hover:bg-slate-800 text-white border border-slate-800 backdrop-blur-md transition" title="Next Slide">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================== -->
+  <!-- 🏷️ CATEGORY & FILTER TABS BAR -->
+  <!-- ========================================== -->
+  <section class="w-full bg-slate-950 border-b border-slate-800/80 sticky top-16 z-40 backdrop-blur-md bg-slate-950/90">
+    <div class="w-full px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
+      
+      <!-- Filter Buttons -->
+      <div class="flex items-center gap-2 shrink-0">
+        <button onclick="setCategory('trending', '🔥 Trending Today')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold bg-emerald-500 text-slate-950 shadow-md transition" data-category="trending">🔥 Trending</button>
+        <button onclick="setCategory('movie', '🎬 Popular Movies')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="movie">🎬 Movies</button>
+        <button onclick="setCategory('tv', '📺 Popular TV Series')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="tv">📺 Series</button>
+        <button onclick="setCategory('top_rated', '⭐ Top Rated Movies')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="top_rated">⭐ Top Rated</button>
+        <button onclick="setGenre(28, '💥 Action')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="genre_28">Action</button>
+        <button onclick="setGenre(878, '🚀 Sci-Fi & Fantasy')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="genre_878">Sci-Fi</button>
+        <button onclick="setGenre(35, '😂 Comedy')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="genre_35">Comedy</button>
+        <button onclick="setGenre(27, '👻 Horror')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="genre_27">Horror</button>
+        <button onclick="setGenre(16, '🎌 Animation / Anime')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="genre_16">Anime</button>
+        <button onclick="setGenre(53, '🕵️ Thriller')" class="filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition" data-category="genre_53">Thriller</button>
+      </div>
+
+      <!-- Counter Badge -->
+      <div class="hidden sm:flex items-center gap-2 shrink-0 text-xs text-slate-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+        <span id="itemsLoadedCount">20+ titles</span>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ========================================== -->
+  <!-- 🖼️ EDGE-TO-EDGE POSTER GRID & INFINITE SCROLL -->
+  <!-- ========================================== -->
+  <main class="flex-1 w-full max-w-[1750px] mx-auto px-3 sm:px-5 lg:px-8 py-8">
+    
+    <!-- Section Header -->
+    <div class="flex items-center justify-between gap-4 mb-6">
+      <div class="flex items-center gap-3">
+        <div class="w-1.5 h-6 bg-gradient-to-b from-emerald-400 to-teal-500 rounded-full"></div>
+        <h2 id="gridSectionTitle" class="text-xl sm:text-2xl font-black text-white tracking-tight">🔥 Trending Today</h2>
+      </div>
+
+      <div class="text-xs text-slate-400 font-medium flex items-center gap-1.5">
+        <span>Scroll down to load more</span>
+        <svg class="w-4 h-4 text-emerald-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- The Responsive Posters Grid (Edge-to-Edge) -->
+    <div 
+      id="postersGrid" 
+      class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4 md:gap-5"
+    >
+      <!-- Initial Skeleton Cards -->
+    </div>
+
+    <!-- ========================================== -->
+    <!-- 🔄 INFINITE SCROLL SENTINEL & LOADING SPINNER -->
+    <!-- ========================================== -->
+    <div id="infiniteScrollSentinel" class="w-full py-12 flex flex-col items-center justify-center">
+      <div id="loadingMoreSpinner" class="hidden flex flex-col items-center gap-3">
+        <div class="w-10 h-10 rounded-full border-4 border-slate-800 border-t-emerald-500 animate-spin"></div>
+        <p class="text-xs font-semibold text-slate-400">Loading next batch of posters...</p>
+      </div>
+      <p id="noMoreDataText" class="hidden text-xs text-slate-500 font-semibold uppercase tracking-wider">You have reached the end</p>
+    </div>
+
+  </main>
+
+  <!-- ========================================== -->
+  <!-- ℹ️ DETAILS & CAST MODAL -->
+  <!-- ========================================== -->
+  <div id="detailsModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+    <div class="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl my-8">
+      
+      <!-- Modal Header Backdrop -->
+      <div class="relative h-64 sm:h-80 w-full overflow-hidden">
+        <div id="modalBackdrop" class="absolute inset-0 bg-cover bg-center"></div>
+        <div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent"></div>
+        
+        <!-- Close Button -->
+        <button onclick="closeDetailsModal()" class="absolute top-4 right-4 p-2 rounded-xl bg-slate-950/70 hover:bg-slate-950 text-slate-300 hover:text-white backdrop-blur-md border border-slate-800 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+
+        <!-- Quick Play Button Over Backdrop -->
+        <div class="absolute bottom-6 left-6 flex items-center gap-4">
+          <button id="modalPlayBtn" class="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm flex items-center gap-2 shadow-lg shadow-emerald-500/30 transition">
+            <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <span>Play Now</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Modal Body Content -->
+      <div class="p-6 sm:p-8 space-y-6">
+        <div>
+          <div class="flex flex-wrap items-center gap-2 mb-2">
+            <span id="modalTypeBadge" class="px-2 py-0.5 text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded">Movie</span>
+            <span id="modalYear" class="text-xs text-slate-400 font-semibold">2026</span>
+            <span id="modalRuntime" class="text-xs text-slate-400 font-semibold">• 2h 15m</span>
+            <span class="flex items-center gap-1 text-xs font-bold text-amber-400">
+              <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+              <span id="modalRating">8.5</span>
+            </span>
+          </div>
+          <h2 id="modalTitle" class="text-2xl sm:text-3xl font-black text-white">Title</h2>
+          <p id="modalGenres" class="text-xs text-emerald-400 font-semibold mt-1">Action, Adventure</p>
+        </div>
+
+        <div>
+          <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Overview</h4>
+          <p id="modalOverview" class="text-sm text-slate-300 leading-relaxed">Overview text...</p>
+        </div>
+
+        <!-- Cast List -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Top Cast</h4>
+          <div id="modalCastList" class="flex gap-4 overflow-x-auto no-scrollbar pb-2">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- ⏰ 24/7 RENDER KEEP-ALIVE MODAL -->
+  <!-- ========================================== -->
+  <div id="keepAliveModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-5">
+      
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <svg class="w-6 h-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-lg font-bold text-white">24/7 Render Keep-Alive</h3>
+            <p class="text-xs text-slate-400">Prevents spin-downs & sleep mode</p>
+          </div>
+        </div>
+        <button onclick="closeKeepAliveModal()" class="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div class="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+          <p class="text-[11px] font-semibold text-slate-400 uppercase">Engine Status</p>
+          <p class="text-sm font-bold text-emerald-400 flex items-center gap-1.5 mt-1">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            Active 24/7
+          </p>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+          <p class="text-[11px] font-semibold text-slate-400 uppercase">Server Uptime</p>
+          <p id="kaUptime" class="text-sm font-bold text-white font-mono mt-1">Calculating...</p>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+          <p class="text-[11px] font-semibold text-slate-400 uppercase">Ping Interval</p>
+          <p class="text-sm font-bold text-white font-mono mt-1">Every 8 mins</p>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+          <p class="text-[11px] font-semibold text-slate-400 uppercase">Next Ping In</p>
+          <p id="kaNextPing" class="text-sm font-bold text-emerald-400 font-mono mt-1">~</p>
+        </div>
+      </div>
+
+      <div class="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+        <div class="flex justify-between text-slate-400">
+          <span>Target URL:</span>
+          <span id="kaTargetUrl" class="font-mono text-slate-300 truncate max-w-[220px]">Auto-detecting</span>
+        </div>
+        <div class="flex justify-between text-slate-400">
+          <span>Total Pings:</span>
+          <span id="kaTotalPings" class="font-mono text-emerald-400 font-bold">0</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <button 
+          id="btnTriggerPing" 
+          onclick="triggerInstantPing()" 
+          class="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <span id="btnTriggerPingText">Send Instant Ping</span>
+        </button>
+        <a 
+          href="/keepalive" 
+          target="_blank" 
+          class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold text-center transition"
+        >
+          Detailed Monitor
+        </a>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- 📱 EXPO / REACT NATIVE CODE SNIPPET MODAL -->
+  <!-- ========================================== -->
+  <div id="expoSnippetModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+    <div class="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <div class="p-2 rounded-xl bg-cyan-500/10 text-cyan-400">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-white">Expo Video / React Native Code</h3>
+            <p class="text-xs text-slate-400">Direct M3U8 stream scraped from VidNest / Mirrors for native mobile apps</p>
+          </div>
+        </div>
+        <button onclick="toggleExpoSnippetModal()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="space-y-2">
+        <p class="text-xs text-slate-300">
+          Copy and paste this snippet directly into your Expo app (<code class="text-emerald-400 font-mono">expo-av</code> or <code class="text-emerald-400 font-mono">expo-video</code>):
+        </p>
+        <pre class="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-emerald-300 overflow-x-auto max-h-64 select-all" id="expoSnippetCode">// Loading snippet...</pre>
+      </div>
+
+      <div class="flex items-center justify-between pt-2">
+        <span class="text-xs text-slate-400">No embedded iframes or sandbox restrictions</span>
+        <button onclick="copyExpoStreamUrl()" class="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition flex items-center gap-1.5 shadow">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+          <span>Copy Stream URL</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- ⚓ FOOTER -->
+  <!-- ========================================== -->
+  <footer class="w-full border-t border-slate-900 bg-slate-950/80 py-8 px-4 sm:px-6 lg:px-8 text-center text-xs text-slate-500">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-2">
+        <span class="font-bold text-slate-400">CineStream PRO</span>
+        <span>•</span>
+        <span>Universal Media Engine with VidNest Scraper & Multi-Server Switching</span>
+      </div>
+      <div class="flex items-center gap-4 text-slate-400">
+        <span>Powered by TMDB API</span>
+        <span>•</span>
+        <button onclick="openKeepAliveModal()" class="text-emerald-400 hover:underline">24/7 Render Active</button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ======================================================== -->
+  <!-- 🚀 APPLICATION LOGIC & STREAM CONTROLLER SCRIPT -->
+  <!-- ======================================================== -->
+  <script>
+    // Global App State
+    const state = {
+      heroList: [],
+      heroIndex: 0,
+      heroTimer: null,
+      currentCategory: 'trending',
+      currentGenreId: null,
+      currentSearchQuery: '',
+      page: 1,
+      totalPages: 1,
+      isLoading: false,
+      hasMore: true,
+      items: [],
+      activeItem: null,
+      currentSeason: 1,
+      currentEpisode: 1,
+      activeServerId: 'vidnest-flixer',
+      servers: [],
+      hlsInstance: null
+    };
+
+    const TMDB_IMG_POSTER = 'https://image.tmdb.org/t/p/w500';
+    const TMDB_IMG_BACKDROP = 'https://image.tmdb.org/t/p/w1280';
+    const TMDB_IMG_ORIGINAL = 'https://image.tmdb.org/t/p/original';
+    const TMDB_IMG_PROFILE = 'https://image.tmdb.org/t/p/w185';
+
+    // ========================================================
+    // 1. INITIALIZATION & HERO CAROUSEL
+    // ========================================================
+    document.addEventListener('DOMContentLoaded', async () => {
+      initSearchInput();
+      initInfiniteScroll();
+      await fetchHeroTrending();
+      await loadInitialGrid();
+      fetchKeepAliveStats();
+      setInterval(fetchKeepAliveStats, 30000);
+    });
+
+    function handleLogoClick(e) {
+      e.preventDefault();
+      clearSearch();
+      setCategory('trending', '🔥 Trending Today');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function fetchHeroTrending() {
+      try {
+        const res = await fetch('/api/tmdb/trending?time=day&page=1');
+        const data = await res.json();
+        if (data && data.results && data.results.length > 0) {
+          state.heroList = data.results.filter(item => item.backdrop_path);
+          renderHeroSlide(0);
+          startHeroTimer();
+        }
+      } catch (err) {
+        console.error('Error fetching hero trending:', err);
+      }
+    }
+
+    function renderHeroSlide(index) {
+      if (!state.heroList || state.heroList.length === 0) return;
+      state.heroIndex = (index + state.heroList.length) % state.heroList.length;
+      const item = state.heroList[state.heroIndex];
+
+      const title = item.title || item.name || 'Featured Title';
+      const type = item.media_type === 'tv' ? 'TV Series' : 'Movie';
+      const year = (item.release_date || item.first_air_date || '2026').substring(0, 4);
+      const rating = (item.vote_average || 8.0).toFixed(1);
+      const overview = item.overview || 'Stream this blockbuster in crystal-clear HD with instant multi-server switching.';
+      const backdropUrl = `${TMDB_IMG_ORIGINAL}${item.backdrop_path}`;
+
+      const heroBackdrop = document.getElementById('heroBackdrop');
+      heroBackdrop.style.backgroundImage = `url('${backdropUrl}')`;
+
+      document.getElementById('heroTitle').innerText = title;
+      document.getElementById('heroOverview').innerText = overview;
+      document.getElementById('heroRating').innerText = rating;
+      document.getElementById('heroYear').innerText = year;
+      document.getElementById('heroTypeBadge').innerText = type;
+
+      const genresMap = { 28: 'Action', 12: 'Adventure', 16: 'Anime', 35: 'Comedy', 80: 'Crime', 18: 'Drama', 14: 'Fantasy', 27: 'Horror', 878: 'Sci-Fi', 53: 'Thriller' };
+      const genreNames = (item.genre_ids || []).map(id => genresMap[id]).filter(Boolean).slice(0, 3).join(' • ');
+      document.getElementById('heroGenres').innerText = genreNames || 'Featured Release';
+    }
+
+    function nextHeroSlide() {
+      renderHeroSlide(state.heroIndex + 1);
+      resetHeroTimer();
+    }
+
+    function prevHeroSlide() {
+      renderHeroSlide(state.heroIndex - 1);
+      resetHeroTimer();
+    }
+
+    function startHeroTimer() {
+      if (state.heroTimer) clearInterval(state.heroTimer);
+      state.heroTimer = setInterval(() => {
+        renderHeroSlide(state.heroIndex + 1);
+      }, 7000);
+    }
+
+    function resetHeroTimer() {
+      clearInterval(state.heroTimer);
+      startHeroTimer();
+    }
+
+    function playCurrentHero() {
+      const item = state.heroList[state.heroIndex];
+      if (item) playMedia(item);
+    }
+
+    function openCurrentHeroInfo() {
+      const item = state.heroList[state.heroIndex];
+      if (item) openDetailsModal(item);
+    }
+
+    // ========================================================
+    // 2. INFINITE SCROLL & GRID LOADING
+    // ========================================================
+    function initInfiniteScroll() {
+      const sentinel = document.getElementById('infiniteScrollSentinel');
+      const observer = new IntersectionObserver(async (entries) => {
+        const entry = entries[0];
+        // Only load if sentinel is visible, user has scrolled to bottom, not already loading, and has more pages
+        if (entry.isIntersecting && !state.isLoading && state.hasMore) {
+          await loadNextPage();
+        }
+      }, {
+        root: null,
+        rootMargin: '400px', // trigger smoothly before user completely hits bottom
+        threshold: 0.1
+      });
+
+      observer.observe(sentinel);
+    }
+
+    async function loadInitialGrid() {
+      state.page = 1;
+      state.items = [];
+      state.hasMore = true;
+      document.getElementById('postersGrid').innerHTML = '';
+      await fetchGridData(1, true);
+    }
+
+    async function loadNextPage() {
+      if (state.isLoading || !state.hasMore) return;
+      const nextPage = state.page + 1;
+      await fetchGridData(nextPage, false);
+    }
+
+    async function fetchGridData(pageToLoad, isInitial = false) {
+      state.isLoading = true;
+      const spinner = document.getElementById('loadingMoreSpinner');
+      spinner.classList.remove('hidden');
+
+      try {
+        let endpoint = '';
+        if (state.currentSearchQuery) {
+          endpoint = `/api/tmdb/search?query=${encodeURIComponent(state.currentSearchQuery)}&page=${pageToLoad}`;
+        } else if (state.currentGenreId) {
+          endpoint = `/api/tmdb/discover?genre=${state.currentGenreId}&type=movie&page=${pageToLoad}`;
+        } else if (state.currentCategory === 'trending') {
+          endpoint = `/api/tmdb/trending?time=day&page=${pageToLoad}`;
+        } else if (state.currentCategory === 'movie') {
+          endpoint = `/api/tmdb/popular-movies?page=${pageToLoad}`;
+        } else if (state.currentCategory === 'tv') {
+          endpoint = `/api/tmdb/popular-tv?page=${pageToLoad}`;
+        } else if (state.currentCategory === 'top_rated') {
+          endpoint = `/api/tmdb/top-rated?page=${pageToLoad}`;
+        } else if (state.currentCategory === 'anime') {
+          endpoint = `/api/tmdb/discover?genre=16&type=tv&page=${pageToLoad}`;
+        }
+
+        const res = await fetch(endpoint);
+        const data = await res.json();
+
+        if (data && data.results) {
+          state.page = pageToLoad;
+          state.totalPages = data.total_pages || 1;
+          state.hasMore = pageToLoad < state.totalPages;
+
+          // Filter items that have a poster path
+          const validItems = data.results.filter(i => i.poster_path);
+          state.items = isInitial ? validItems : [...state.items, ...validItems];
+
+          renderPosters(validItems, isInitial);
+          document.getElementById('itemsLoadedCount').innerText = `${state.items.length} titles loaded`;
+
+          if (!state.hasMore) {
+            document.getElementById('noMoreDataText').classList.remove('hidden');
+          } else {
+            document.getElementById('noMoreDataText').classList.add('hidden');
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching grid data:', err);
+      } finally {
+        state.isLoading = false;
+        spinner.classList.add('hidden');
+      }
+    }
+
+    function renderPosters(newItems, isReset) {
+      const grid = document.getElementById('postersGrid');
+      if (isReset) grid.innerHTML = '';
+
+      newItems.forEach(item => {
+        const title = item.title || item.name || 'Untitled';
+        const isTv = item.media_type === 'tv' || !item.release_date && !!item.first_air_date || state.currentCategory === 'tv';
+        const typeStr = isTv ? 'TV' : 'Movie';
+        const year = (item.release_date || item.first_air_date || '2026').substring(0, 4);
+        const rating = item.vote_average ? item.vote_average.toFixed(1) : '7.5';
+        const posterUrl = `${TMDB_IMG_POSTER}${item.poster_path}`;
+
+        const card = document.createElement('div');
+        card.className = 'group relative rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 hover:border-emerald-500/60 shadow-lg hover:shadow-emerald-500/20 transition-all duration-300 hover:-translate-y-1.5 cursor-pointer select-none';
+        
+        card.innerHTML = `
+          <div class="relative aspect-poster w-full overflow-hidden bg-slate-950">
+            <!-- Poster Image -->
+            <img 
+              src="${posterUrl}" 
+              alt="${title}" 
+              loading="lazy"
+              class="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+            />
+            
+            <!-- Top Badges -->
+            <div class="absolute top-2.5 inset-x-2.5 flex items-center justify-between pointer-events-none">
+              <span class="px-2 py-0.5 text-[10px] font-bold uppercase rounded-md bg-slate-950/80 text-emerald-400 border border-emerald-500/30 backdrop-blur-md">
+                ${typeStr}
+              </span>
+              <span class="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-bold rounded-md bg-slate-950/80 text-amber-400 border border-amber-500/30 backdrop-blur-md">
+                <svg class="w-3 h-3 fill-current" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                ${rating}
+              </span>
+            </div>
+
+            <!-- Hover Play Overlay -->
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3">
+              <div class="flex items-center justify-center mb-auto pt-10">
+                <div class="w-12 h-12 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center shadow-lg shadow-emerald-500/50 transform scale-75 group-hover:scale-100 transition-transform duration-300">
+                  <svg class="w-6 h-6 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              <p class="text-xs text-slate-300 line-clamp-2 mb-1">${item.overview || 'Click to play instantly on high speed servers'}</p>
+              <div class="flex items-center justify-between text-[11px] text-emerald-400 font-bold">
+                <span>▶ Watch Now</span>
+                <span class="text-slate-400">${year}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Card Content -->
+          <div class="p-2.5 bg-slate-900">
+            <h3 class="text-xs sm:text-sm font-bold text-white truncate group-hover:text-emerald-400 transition-colors" title="${title}">
+              ${title}
+            </h3>
+            <div class="flex items-center justify-between mt-1 text-[11px] text-slate-400">
+              <span>${year}</span>
+              <span class="text-emerald-400 font-semibold">1080p</span>
+            </div>
+          </div>
+        `;
+
+        card.addEventListener('click', () => {
+          // Normalize media type for TV shows
+          item.media_type = isTv ? 'tv' : 'movie';
+          playMedia(item);
+        });
+
+        grid.appendChild(card);
+      });
+    }
+
+    // ========================================================
+    // 3. CATEGORY & GENRE SELECTION
+    // ========================================================
+    function setCategory(cat, title) {
+      state.currentCategory = cat;
+      state.currentGenreId = null;
+      state.currentSearchQuery = '';
+      document.getElementById('searchInput').value = '';
+      document.getElementById('searchClearBtn').classList.add('hidden');
+
+      document.getElementById('gridSectionTitle').innerText = title;
+      updateFilterPills(cat);
+      loadInitialGrid();
+    }
+
+    function setGenre(genreId, title) {
+      state.currentGenreId = genreId;
+      state.currentCategory = `genre_${genreId}`;
+      state.currentSearchQuery = '';
+      document.getElementById('searchInput').value = '';
+      document.getElementById('searchClearBtn').classList.add('hidden');
+
+      document.getElementById('gridSectionTitle').innerText = title;
+      updateFilterPills(`genre_${genreId}`);
+      loadInitialGrid();
+    }
+
+    function updateFilterPills(activeCategoryKey) {
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        if (btn.dataset.category === activeCategoryKey) {
+          btn.className = 'filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold bg-emerald-500 text-slate-950 shadow-md transition';
+        } else {
+          btn.className = 'filter-btn px-4 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition';
+        }
+      });
+    }
+
+    // ========================================================
+    // 4. LIVE SEARCH WITH DEBOUNCE
+    // ========================================================
+    function initSearchInput() {
+      const input = document.getElementById('searchInput');
+      const clearBtn = document.getElementById('searchClearBtn');
+      let debounceTimer = null;
+
+      input.addEventListener('input', (e) => {
+        const val = e.target.value.trim();
+        if (val) {
+          clearBtn.classList.remove('hidden');
+        } else {
+          clearBtn.classList.add('hidden');
+        }
+
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          if (val) {
+            state.currentSearchQuery = val;
+            state.currentCategory = 'search';
+            state.currentGenreId = null;
+            document.getElementById('gridSectionTitle').innerText = `🔍 Results for "${val}"`;
+            loadInitialGrid();
+          } else {
+            clearSearch();
+          }
+        }, 350);
+      });
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          input.blur();
+        }
+      });
+    }
+
+    function clearSearch() {
+      const input = document.getElementById('searchInput');
+      input.value = '';
+      document.getElementById('searchClearBtn').classList.add('hidden');
+      if (state.currentSearchQuery) {
+        state.currentSearchQuery = '';
+        setCategory('trending', '🔥 Trending Today');
+      }
+    }
+
+    // ========================================================
+    // 5. CINEMA PLAYER & MULTI-SERVER STREAMING
+    // ========================================================
+    const DEFAULT_SERVERS = [
+      { id: 'flixer', name: 'VidNest (Flixer)', provider: 'VidNest', badge: 'Primary HD', quality: '1080p' },
+      { id: 'lambda', name: 'VidNest (Lambda)', provider: 'VidNest', badge: 'Fast VIP', quality: '1080p' },
+      { id: 'gamma', name: 'VidNest (Gamma)', provider: 'VidNest', badge: 'Cloud Global', quality: '1080p' },
+      { id: 'sigma', name: 'VidNest (Sigma)', provider: 'VidNest', badge: 'Multi-Audio', quality: '1080p' },
+      { id: 'delta', name: 'VidNest (Delta)', provider: 'VidNest', badge: 'Direct CDN', quality: '1080p' },
+      { id: 'anikoto', name: 'VidNest (Anime)', provider: 'VidNest', badge: 'Anime Dub/Sub', quality: '1080p' },
+      { id: 'autoembed', name: 'AutoEmbed VIP', provider: 'AutoEmbed', badge: 'VIP Server', quality: '1080p' },
+      { id: 'vidrock', name: 'VidRock Mirror', provider: 'VidRock', badge: 'Fast Mirror', quality: '1080p' },
+      { id: 'vidsrc', name: 'VidSrc Multi', provider: 'VidSrc', badge: 'Multi-Lang', quality: '1080p' }
+    ];
+
+    async function playMedia(item, seasonNum = 1, episodeNum = 1) {
+      state.activeItem = item;
+      state.currentSeason = seasonNum;
+      state.currentEpisode = episodeNum;
+      state.activeServerId = 'flixer';
+      state.servers = DEFAULT_SERVERS;
+      // Mark VidNest cluster sub-servers as playable
+      state.playableServers = new Set(['flixer', 'lambda', 'gamma', 'sigma', 'delta']);
+
+      const isTv = item.media_type === 'tv' || item.name && !item.title;
+      const title = item.title || item.name || 'Untitled';
+      
+      // Update UI titles
+      const playerSection = document.getElementById('playerSection');
+      playerSection.classList.remove('hidden');
+      document.getElementById('playerTitle').innerText = title;
+      
+      if (isTv) {
+        document.getElementById('playerSubtitle').innerText = `Season ${seasonNum} • Episode ${episodeNum}`;
+        document.getElementById('seriesQuickNav').classList.remove('hidden');
+        document.getElementById('quickEpIndicator').innerText = `S${seasonNum}:E${episodeNum}`;
+        document.getElementById('seriesSelectorContainer').classList.remove('hidden');
+        document.getElementById('movieInfoSidebar').classList.add('hidden');
+        loadSeriesSeasonsAndEpisodes(item.id, seasonNum, episodeNum);
+      } else {
+        document.getElementById('playerSubtitle').innerText = `Full Movie (${(item.release_date || '2026').substring(0, 4)})`;
+        document.getElementById('seriesQuickNav').classList.add('hidden');
+        document.getElementById('seriesSelectorContainer').classList.add('hidden');
+        document.getElementById('movieInfoSidebar').classList.remove('hidden');
+        updateMovieSidebar(item);
+      }
+
+      // Smooth scroll to player
+      playerSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      // Render default servers immediately (Flixer active in Green, other playable in Yellow)
+      renderServerButtons(DEFAULT_SERVERS, 'flixer');
+
+      // Trigger stream extraction with clean loading text
+      showPlayerLoading(true, 'Loading stream...');
+      applyServer({ id: 'flixer', name: 'VidNest (Flixer)' });
+
+      // In background, refresh servers metadata
+      fetchAndApplyServers(item.id, isTv ? 'tv' : 'movie', seasonNum, episodeNum, title);
+    }
+
+    async function fetchAndApplyServers(id, type, season, episode, title) {
+      try {
+        const res = await fetch(`/api/servers?id=${id}&type=${type}&season=${season}&episode=${episode}&title=${encodeURIComponent(title)}`);
+        const data = await res.json();
+        
+        if (data && data.servers && data.servers.length > 0) {
+          state.servers = data.servers;
+          if (data.hasDirectM3u8) {
+            state.playableServers.add('flixer');
+            state.playableServers.add('lambda');
+            state.playableServers.add('gamma');
+            state.playableServers.add('sigma');
+            state.playableServers.add('delta');
+          }
+          renderServerButtons(data.servers, state.activeServerId || 'flixer');
+        }
+      } catch (e) {
+        console.error('Error fetching dynamic servers metadata:', e);
+      }
+    }
+
+    function renderServerButtons(servers, activeServerId) {
+      const container = document.getElementById('serversList');
+      container.innerHTML = '';
+
+      servers.forEach(srv => {
+        const isActive = srv.id === activeServerId;
+        const isPlayable = state.playableServers && state.playableServers.has(srv.id);
+        const btn = document.createElement('button');
+        btn.dataset.serverId = srv.id;
+        
+        // Active server -> Prominently GREEN; Playable server with stream -> Prominently YELLOW; Others -> Slate
+        if (isActive) {
+          btn.className = 'server-btn px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-500/25 text-emerald-300 border-2 border-emerald-400 shadow-lg shadow-emerald-500/30 flex items-center gap-2 transition-all transform scale-105';
+          btn.innerHTML = `
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            <span>${srv.name}</span>
+            <span class="px-1.5 py-0.5 text-[9px] font-black uppercase rounded bg-emerald-400 text-slate-950 ml-1 shadow-sm">ACTIVE</span>
+          `;
+        } else if (isPlayable) {
+          btn.className = 'server-btn px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500/15 text-amber-300 border-2 border-amber-400/90 shadow-md shadow-amber-500/20 flex items-center gap-2 transition-all hover:bg-amber-500/25';
+          btn.innerHTML = `
+            <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+            <span>${srv.name}</span>
+            <span class="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-400 text-slate-950 ml-1 shadow-sm">⚡ PLAYABLE</span>
+          `;
+        } else {
+          btn.className = 'server-btn px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 flex items-center gap-1.5 transition-all';
+          btn.innerHTML = `
+            <span class="w-2 h-2 rounded-full bg-slate-600"></span>
+            <span>${srv.name}</span>
+            <span class="px-1 py-0.5 text-[9px] rounded bg-slate-800 text-slate-400 ml-0.5">${srv.badge || srv.quality}</span>
+          `;
+        }
+
+        btn.addEventListener('click', () => {
+          switchServer(srv.id);
+        });
+
+        container.appendChild(btn);
+      });
+    }
+
+    function switchServer(serverId) {
+      const server = state.servers.find(s => s.id === serverId);
+      if (!server) return;
+
+      state.activeServerId = serverId;
+      renderServerButtons(state.servers, serverId);
+      applyServer(server);
+    }
+
+    async function applyServer(server) {
+      const video = document.getElementById('hlsVideoPlayer');
+      const input = document.getElementById('expoStreamUrlInput');
+
+      showPlayerLoading(true, 'Loading stream...');
+
+      const isTv = state.activeItem.media_type === 'tv' || (state.activeItem.name && !state.activeItem.title);
+      const title = state.activeItem.title || state.activeItem.name || '';
+      const srvSlug = server.id;
+
+      try {
+        const res = await fetch(`/api/resolve-stream?id=${state.activeItem.id}&type=${isTv ? 'tv' : 'movie'}&season=${state.currentSeason}&episode=${state.currentEpisode}&title=${encodeURIComponent(title)}&server=${srvSlug}`);
+        const data = await res.json();
+
+        if (data && data.streamUrl) {
+          let streamUrl = data.streamUrl;
+          // Ensure same-origin relative URL for web player to guarantee HTTPS and prevent Mixed Content blocks
+          if (streamUrl.includes('/api/stream-proxy?')) {
+            streamUrl = streamUrl.substring(streamUrl.indexOf('/api/stream-proxy?'));
+          }
+          state.activeStreamUrl = streamUrl;
+
+          // Add to playable set and re-render yellow highlights for all verified servers
+          if (!state.playableServers) state.playableServers = new Set();
+          state.playableServers.add(srvSlug);
+          if (['flixer', 'lambda', 'gamma', 'sigma', 'delta'].includes(srvSlug)) {
+            state.playableServers.add('flixer');
+            state.playableServers.add('lambda');
+            state.playableServers.add('gamma');
+            state.playableServers.add('sigma');
+            state.playableServers.add('delta');
+          }
+          renderServerButtons(state.servers, srvSlug);
+
+          // Provide full absolute URL in the Expo input box
+          const absoluteStreamUrl = streamUrl.startsWith('http') ? streamUrl : `${window.location.origin}${streamUrl}`;
+          if (input) input.value = absoluteStreamUrl;
+
+          // Native HLS playback with Hls.js (100% Sandbox-Free Direct Video)
+          if (Hls.isSupported()) {
+            if (state.hlsInstance) {
+              state.hlsInstance.destroy();
+            }
+            const hls = new Hls({ 
+              enableWorker: true, 
+              lowLatencyMode: true,
+              backBufferLength: 60,
+              maxBufferLength: 30
+            });
+            state.hlsInstance = hls;
+            hls.loadSource(streamUrl);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              showPlayerLoading(false);
+              video.play().catch(() => {
+                // If unmuted autoplay blocked by browser policy, play muted and let user unmute
+                video.muted = true;
+                video.play().catch(() => {});
+              });
+            });
+            hls.on(Hls.Events.ERROR, (event, errData) => {
+              if (errData.fatal) {
+                switch (errData.type) {
+                  case Hls.ErrorTypes.NETWORK_ERROR:
+                    console.warn('HLS fatal network error, recovering...', errData);
+                    hls.startLoad();
+                    break;
+                  case Hls.ErrorTypes.MEDIA_ERROR:
+                    console.warn('HLS fatal media error, recovering...', errData);
+                    hls.recoverMediaError();
+                    break;
+                  default:
+                    console.warn('HLS fatal error encountered, trying next server:', errData);
+                    if (srvSlug === 'flixer') switchServer('lambda');
+                    else if (srvSlug === 'lambda') switchServer('gamma');
+                    break;
+                }
+              }
+            });
+          } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Safari / iOS / Android WebView
+            video.src = streamUrl;
+            video.onloadeddata = () => showPlayerLoading(false);
+            video.play().catch(() => {});
+            showPlayerLoading(false);
+          } else {
+            video.src = streamUrl;
+            video.onloadeddata = () => showPlayerLoading(false);
+            video.play().catch(() => {});
+            showPlayerLoading(false);
+          }
+          return;
+        } else {
+          throw new Error(data.error || 'Direct stream URL not found');
+        }
+      } catch (err) {
+        console.error('Error applying server:', err);
+        showPlayerLoading(true, 'Connecting backup server...');
+        if (srvSlug === 'flixer') {
+          setTimeout(() => switchServer('lambda'), 500);
+        } else if (srvSlug === 'lambda') {
+          setTimeout(() => switchServer('gamma'), 500);
+        } else {
+          setTimeout(() => showPlayerLoading(false), 2000);
+        }
+      }
+    }
+
+    function showPlayerLoading(show, text = 'Loading stream...') {
+      const loader = document.getElementById('playerLoading');
+      const textEl = document.getElementById('playerLoadingText');
+      if (text && textEl) textEl.innerText = text;
+
+      if (show) {
+        loader.classList.remove('opacity-0', 'pointer-events-none');
+      } else {
+        loader.classList.add('opacity-0', 'pointer-events-none');
+      }
+    }
+
+    function closePlayer() {
+      const playerSection = document.getElementById('playerSection');
+      playerSection.classList.add('hidden');
+      const video = document.getElementById('hlsVideoPlayer');
+      video.pause();
+      if (state.hlsInstance) {
+        state.hlsInstance.destroy();
+        state.hlsInstance = null;
+      }
+      video.removeAttribute('src');
+      video.load();
+    }
+
+    function copyExpoStreamUrl() {
+      const input = document.getElementById('expoStreamUrlInput');
+      const text = input ? input.value : '';
+      if (!text || text.startsWith('Scraping')) return;
+
+      navigator.clipboard.writeText(text).then(() => {
+        const btnText = document.getElementById('copyBtnText');
+        const original = btnText.innerText;
+        btnText.innerText = 'Copied!';
+        setTimeout(() => {
+          btnText.innerText = original;
+        }, 2000);
+      }).catch(() => {
+        input.select();
+        document.execCommand('copy');
+      });
+    }
+
+    function openInVlc() {
+      if (state.activeStreamUrl) {
+        window.open(`vlc://${state.activeStreamUrl}`, '_blank');
+      }
+    }
+
+    function toggleExpoSnippetModal() {
+      const modal = document.getElementById('expoSnippetModal');
+      if (modal) {
+        modal.classList.toggle('hidden');
+        if (!modal.classList.contains('hidden')) {
+          const codeEl = document.getElementById('expoSnippetCode');
+          const streamUrl = state.activeStreamUrl || (document.getElementById('expoStreamUrlInput') ? document.getElementById('expoStreamUrlInput').value : '');
+          codeEl.innerText = `// React Native / Expo Video Implementation:
+import React from 'react';
+import { View, StyleSheet } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
+
+export default function MovieStreamScreen() {
+  return (
+    <View style={styles.container}>
+      <Video
+        source={{
+          uri: "${streamUrl}"
+        }}
+        rate={1.0}
+        volume={1.0}
+        isMuted={false}
+        resizeMode={ResizeMode.CONTAIN}
+        shouldPlay
+        useNativeControls
+        style={styles.video}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
+  video: { width: '100%', height: 300 }
+});`;
+        }
+      }
+    }
+
+    // ========================================================
+    // 6. TV SERIES SEASONS & EPISODES MANAGER
+    // ========================================================
+    async function loadSeriesSeasonsAndEpisodes(tvId, activeSeason = 1, activeEpisode = 1) {
+      try {
+        const detailsRes = await fetch(`/api/tmdb/details?id=${tvId}&type=tv`);
+        const details = await detailsRes.json();
+        
+        const seasonSelect = document.getElementById('seasonSelect');
+        seasonSelect.innerHTML = '';
+
+        const seasons = (details.seasons || []).filter(s => s.season_number > 0);
+        seasons.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.season_number;
+          opt.innerText = `Season ${s.season_number} (${s.episode_count} Episodes)`;
+          if (s.season_number === activeSeason) opt.selected = true;
+          seasonSelect.appendChild(opt);
+        });
+
+        await fetchAndRenderEpisodes(tvId, activeSeason, activeEpisode);
+      } catch (err) {
+        console.error('Error loading seasons:', err);
+      }
+    }
+
+    async function onSeasonChange(seasonNum) {
+      state.currentSeason = parseInt(seasonNum);
+      state.currentEpisode = 1;
+      if (state.activeItem) {
+        await fetchAndRenderEpisodes(state.activeItem.id, state.currentSeason, 1);
+        playMedia(state.activeItem, state.currentSeason, 1);
+      }
+    }
+
+    async function fetchAndRenderEpisodes(tvId, seasonNum, activeEpisodeNum) {
+      const grid = document.getElementById('episodesGrid');
+      grid.innerHTML = '<div class="col-span-full py-6 text-center text-xs text-slate-400">Loading episodes...</div>';
+
+      try {
+        const res = await fetch(`/api/tmdb/tv-season?id=${tvId}&season=${seasonNum}`);
+        const data = await res.json();
+        
+        if (data && data.episodes) {
+          grid.innerHTML = '';
+          data.episodes.forEach(ep => {
+            const isPlaying = ep.episode_number === activeEpisodeNum;
+            const epStill = ep.still_path ? `${TMDB_IMG_POSTER}${ep.still_path}` : 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=500&auto=format&fit=crop&q=80';
+            const epCard = document.createElement('div');
+            
+            epCard.className = `group/ep flex items-center gap-3 p-2 rounded-xl bg-slate-950/80 border transition-all cursor-pointer ${
+              isPlaying 
+                ? 'border-emerald-500 shadow-md shadow-emerald-500/20 bg-emerald-500/10' 
+                : 'border-slate-800/80 hover:border-slate-700 hover:bg-slate-900/90'
+            }`;
+
+            epCard.innerHTML = `
+              <div class="relative w-24 sm:w-28 aspect-video rounded-lg overflow-hidden bg-slate-900 flex-shrink-0">
+                <img src="${epStill}" alt="${ep.name}" loading="lazy" class="w-full h-full object-cover group-hover/ep:scale-105 transition-transform duration-300">
+                <div class="absolute inset-0 bg-slate-950/40 flex items-center justify-center opacity-0 group-hover/ep:opacity-100 transition-opacity">
+                  <div class="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center shadow">
+                    <svg class="w-3.5 h-3.5 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                  </div>
+                </div>
+                ${isPlaying ? `<span class="absolute top-1 left-1 px-1.5 py-0.5 text-[8px] font-black bg-emerald-500 text-slate-950 rounded tracking-wider">PLAYING</span>` : ''}
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between text-xs mb-0.5">
+                  <span class="font-bold ${isPlaying ? 'text-emerald-400' : 'text-slate-200'}">EP ${ep.episode_number}</span>
+                  <span class="text-[10px] text-slate-400 font-mono">${ep.runtime ? ep.runtime + 'm' : ''}</span>
+                </div>
+                <h4 class="text-xs font-semibold text-slate-300 truncate" title="${ep.name}">${ep.name || `Episode ${ep.episode_number}`}</h4>
+                <p class="text-[11px] text-slate-400 line-clamp-1 mt-0.5">${ep.overview || 'Instant stream available'}</p>
+              </div>
+            `;
+
+            epCard.addEventListener('click', () => {
+              playMedia(state.activeItem, seasonNum, ep.episode_number);
+            });
+
+            grid.appendChild(epCard);
+          });
+        }
+      } catch (e) {
+        console.error('Error fetching episodes:', e);
+      }
+    }
+
+    async function updateMovieSidebar(item) {
+      const posterImg = document.getElementById('movieSidebarPoster');
+      const ratingEl = document.getElementById('movieSidebarRating');
+      const overviewEl = document.getElementById('movieSidebarOverview');
+      const yearGenreEl = document.getElementById('movieSidebarYearGenre');
+      const castList = document.getElementById('movieSidebarCastList');
+      const castSection = document.getElementById('movieSidebarCastSection');
+      
+      const backdrop = item.backdrop_path ? `${TMDB_IMG_BACKDROP}${item.backdrop_path}` : (item.poster_path ? `${TMDB_IMG_POSTER}${item.poster_path}` : 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80');
+      if (posterImg) posterImg.src = backdrop;
+      if (ratingEl) ratingEl.innerText = (item.vote_average || 8.0).toFixed(1);
+      if (overviewEl) overviewEl.innerText = item.overview || 'Unlimited streaming on high-speed servers with direct master M3U8 extraction.';
+      if (yearGenreEl) {
+        const year = (item.release_date || '2026').substring(0, 4);
+        yearGenreEl.innerText = `Full Movie (${year}) • HD 1080p • Direct Master Stream`;
+      }
+
+      // Fetch credits & render top cast in synopsis card
+      if (castList) {
+        castList.innerHTML = '<div class="text-[10px] text-slate-500 py-1">Loading cast...</div>';
+        try {
+          const isTv = item.media_type === 'tv' || (item.name && !item.title);
+          const detailsRes = await fetch(`/api/tmdb/details?id=${item.id}&type=${isTv ? 'tv' : 'movie'}`);
+          const details = await detailsRes.json();
+          
+          if (details.genres && yearGenreEl) {
+            const year = (item.release_date || item.first_air_date || '2026').substring(0, 4);
+            const genresStr = details.genres.slice(0, 2).map(g => g.name).join(', ');
+            yearGenreEl.innerText = `${isTv ? 'Series' : 'Movie'} (${year}) • ${genresStr || 'HD 1080p'}`;
+          }
+
+          const castMembers = (details.credits?.cast || []).slice(0, 8);
+          castList.innerHTML = '';
+          if (castMembers.length === 0) {
+            if (castSection) castSection.classList.add('hidden');
+          } else {
+            if (castSection) castSection.classList.remove('hidden');
+            castMembers.forEach(person => {
+              const photo = person.profile_path ? `${TMDB_IMG_PROFILE}${person.profile_path}` : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80';
+              const card = document.createElement('div');
+              card.className = 'w-16 shrink-0 text-center space-y-1';
+              card.innerHTML = `
+                <div class="w-12 h-12 mx-auto rounded-full overflow-hidden bg-slate-800 border border-slate-700 shadow-sm group-hover:border-amber-400 transition-colors">
+                  <img src="${photo}" alt="${person.name}" loading="lazy" class="w-full h-full object-cover">
+                </div>
+                <p class="text-[10px] font-bold text-slate-200 truncate leading-tight" title="${person.name}">${person.name}</p>
+                <p class="text-[8px] text-slate-400 truncate leading-none" title="${person.character || ''}">${person.character || ''}</p>
+              `;
+              castList.appendChild(card);
+            });
+          }
+        } catch (e) {
+          console.error('Error fetching cast for movie sidebar:', e);
+          if (castSection) castSection.classList.add('hidden');
+        }
+      }
+    }
+
+    function changeEpisodeOffset(offset) {
+      if (!state.activeItem) return;
+      const targetEp = Math.max(1, state.currentEpisode + offset);
+      playMedia(state.activeItem, state.currentSeason, targetEp);
+    }
+
+    // ========================================================
+    // 7. DETAILS MODAL & CAST
+    // ========================================================
+    async function openDetailsModal(item) {
+      const modal = document.getElementById('detailsModal');
+      modal.classList.remove('hidden');
+      
+      const isTv = item.media_type === 'tv' || item.name && !item.title;
+      const title = item.title || item.name || 'Untitled';
+      const year = (item.release_date || item.first_air_date || '2026').substring(0, 4);
+      const rating = (item.vote_average || 7.8).toFixed(1);
+
+      document.getElementById('modalTitle').innerText = title;
+      document.getElementById('modalOverview').innerText = item.overview || 'Blockbuster film available for streaming on fast servers.';
+      document.getElementById('modalRating').innerText = rating;
+      document.getElementById('modalYear').innerText = year;
+      document.getElementById('modalTypeBadge').innerText = isTv ? 'TV Series' : 'Movie';
+
+      const backdrop = item.backdrop_path ? `${TMDB_IMG_BACKDROP}${item.backdrop_path}` : `${TMDB_IMG_POSTER}${item.poster_path}`;
+      document.getElementById('modalBackdrop').style.backgroundImage = `url('${backdrop}')`;
+
+      document.getElementById('modalPlayBtn').onclick = () => {
+        closeDetailsModal();
+        playMedia(item);
+      };
+
+      // Fetch full credits & genres
+      try {
+        const detailsRes = await fetch(`/api/tmdb/details?id=${item.id}&type=${isTv ? 'tv' : 'movie'}`);
+        const details = await detailsRes.json();
+        
+        if (details.genres) {
+          document.getElementById('modalGenres').innerText = details.genres.map(g => g.name).join(', ');
+        }
+        if (details.runtime) {
+          document.getElementById('modalRuntime').innerText = `• ${details.runtime}m`;
+        }
+
+        const castList = document.getElementById('modalCastList');
+        castList.innerHTML = '';
+        const castMembers = (details.credits?.cast || []).slice(0, 8);
+        
+        castMembers.forEach(person => {
+          const photo = person.profile_path ? `${TMDB_IMG_PROFILE}${person.profile_path}` : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80';
+          const card = document.createElement('div');
+          card.className = 'w-20 shrink-0 text-center space-y-1';
+          card.innerHTML = `
+            <div class="w-16 h-16 mx-auto rounded-full overflow-hidden bg-slate-800 border border-slate-700">
+              <img src="${photo}" alt="${person.name}" class="w-full h-full object-cover">
+            </div>
+            <p class="text-[11px] font-bold text-white truncate">${person.name}</p>
+            <p class="text-[9px] text-slate-400 truncate">${person.character || ''}</p>
+          `;
+          castList.appendChild(card);
+        });
+
+      } catch (e) {
+        console.error('Error fetching details:', e);
+      }
+    }
+
+    function closeDetailsModal() {
+      document.getElementById('detailsModal').classList.add('hidden');
+    }
+
+    // ========================================================
+    // 8. 24/7 RENDER KEEP-ALIVE MONITOR MODAL
+    // ========================================================
+    async function fetchKeepAliveStats() {
+      try {
+        const res = await fetch('/api/keepalive/status');
+        const json = await res.json();
+        if (json && json.data) {
+          const d = json.data;
+          document.getElementById('kaUptime').innerText = d.uptimeFormatted || 'Online';
+          document.getElementById('navUptime').innerText = d.uptimeFormatted ? `${d.uptimeFormatted}` : '8m Ping';
+          document.getElementById('kaTargetUrl').innerText = d.targetUrl || 'Auto';
+          document.getElementById('kaTotalPings').innerText = d.totalPings || '0';
+          document.getElementById('kaNextPing').innerText = d.nextPingInSeconds ? `${d.nextPingInSeconds}s` : 'Imminent';
+        }
+      } catch (e) {}
+    }
+
+    function openKeepAliveModal() {
+      fetchKeepAliveStats();
+      document.getElementById('keepAliveModal').classList.remove('hidden');
+    }
+
+    function closeKeepAliveModal() {
+      document.getElementById('keepAliveModal').classList.add('hidden');
+    }
+
+    async function triggerInstantPing() {
+      const btn = document.getElementById('btnTriggerPing');
+      const text = document.getElementById('btnTriggerPingText');
+      btn.disabled = true;
+      text.innerText = 'Pinging...';
+      try {
+        await fetch('/api/keepalive/ping', { method: 'POST' });
+        await fetchKeepAliveStats();
+        text.innerText = 'Ping Successful!';
+        setTimeout(() => {
+          text.innerText = 'Send Instant Ping';
+          btn.disabled = false;
+        }, 2000);
+      } catch (e) {
+        text.innerText = 'Ping Failed';
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
