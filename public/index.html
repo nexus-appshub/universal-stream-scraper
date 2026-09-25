@@ -1822,7 +1822,7 @@
             });
             state.hlsInstance = hls;
             let netRetryCount = 0;
-            hls.loadSource(streamUrl);
+            hls.loadSource(absoluteStreamUrl);
             hls.attachMedia(video);
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
               showPlayerLoading(false);
@@ -1856,12 +1856,12 @@
               }
             });
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = streamUrl;
+            video.src = absoluteStreamUrl;
             video.onloadeddata = () => showPlayerLoading(false);
             video.play().catch(() => {});
             showPlayerLoading(false);
           } else {
-            video.src = streamUrl;
+            video.src = absoluteStreamUrl;
             video.onloadeddata = () => showPlayerLoading(false);
             video.play().catch(() => {});
             showPlayerLoading(false);

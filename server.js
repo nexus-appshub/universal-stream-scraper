@@ -619,7 +619,7 @@ async function fastScrape(browser, targetUrl, sharedState) {
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
       const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
 
-      if (isMedia && !isFake && (status === 200 || status === 206) && !localResolved) {
+      if (isMedia && !isFake && !localResolved) {
         localResolved = true;
         if (sharedState) {
           sharedState.resolved = true;
@@ -1088,34 +1088,12 @@ async function fetchVidnestDirectStream(params, serverSlug) {
             );
 
             if (isStream) {
-              // Pre-flight check: verify stream endpoint is alive (not 522 Cloudflare error or 404/500/timeout)
-              try {
-                const pingHeaders = {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                  'Referer': streamRef,
-                  'Origin': streamRef.replace(/\/$/, '')
-                };
-                if (customHeaders) {
-                  for (const [k, v] of Object.entries(customHeaders)) {
-                    pingHeaders[k.toLowerCase()] = v;
-                  }
-                }
-                const pingRes = await axios.get(streamUrl, {
-                  headers: pingHeaders,
-                  timeout: 2200,
-                  validateStatus: (s) => s >= 200 && s < 400
-                });
-                if (pingRes && pingRes.status >= 200 && pingRes.status < 400) {
-                  globalController.abort();
-                  return {
-                    url: streamUrl,
-                    ref: streamRef,
-                    headers: customHeaders
-                  };
-                }
-              } catch (pingErr) {
-                // Stream origin server is dead/unreachable (e.g. 522 timeout), reject candidate to try next provider
-              }
+              globalController.abort();
+              return {
+                url: streamUrl,
+                ref: streamRef,
+                headers: customHeaders
+              };
             }
           }
           throw new Error('Valid stream not found');
@@ -1192,36 +1170,20 @@ async function handleResolveStream(req, res) {
   // Check cache ONLY for this specific server slug to prevent language/server cross-contamination
   const cached = streamCache.get(cacheKey);
   if (cached && Date.now() - cached.time < CACHE_TTL) {
-    let isCacheAlive = true;
-    try {
-      const checkRes = await axios.get(cached.url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': cached.ref || 'https://vidnest.fun/' },
-        timeout: 2000,
-        validateStatus: (s) => s >= 200 && s < 400
-      });
-      if (!checkRes || checkRes.status >= 400) isCacheAlive = false;
-    } catch (e) {
-      isCacheAlive = false;
-    }
-
-    if (isCacheAlive) {
-      const headersParam = cached.headers ? `&headers=${encodeURIComponent(JSON.stringify(cached.headers))}` : '';
-      const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}${headersParam}`;
-      return res.json({
-        success: true,
-        isEmbed: false,
-        streamUrl: streamProxyUrl,
-        rawUrl: cached.url,
-        proxy_stream_url: streamProxyUrl,
-        stream_url: cached.url,
-        expoStreamUrl: streamProxyUrl,
-        vlcStreamUrl: streamProxyUrl,
-        server: serverSlug,
-        type: params.typeStr
-      });
-    } else {
-      streamCache.delete(cacheKey);
-    }
+    const headersParam = cached.headers ? `&headers=${encodeURIComponent(JSON.stringify(cached.headers))}` : '';
+    const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}${headersParam}`;
+    return res.json({
+      success: true,
+      isEmbed: false,
+      streamUrl: streamProxyUrl,
+      rawUrl: cached.url,
+      proxy_stream_url: streamProxyUrl,
+      stream_url: cached.url,
+      expoStreamUrl: streamProxyUrl,
+      vlcStreamUrl: streamProxyUrl,
+      server: serverSlug,
+      type: params.typeStr
+    });
   }
 
   if (pendingScrapes.has(cacheKey)) {
@@ -1646,9 +1608,19 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       return res.send(htmlPlayer);
     }
 
-    const isM3u8Url = cleanUrl.toLowerCase().includes('.m3u8') || cleanUrl.toLowerCase().includes('playlist') || cleanUrl.toLowerCase().includes('master.txt') || cleanUrl.toLowerCase().includes('/hls/');
+    const isSegmentFile = cleanUrl.toLowerCase().includes('.ts') || 
+                          cleanUrl.toLowerCase().includes('.mp4') || 
+                          cleanUrl.toLowerCase().includes('.m4s') || 
+                          cleanUrl.toLowerCase().includes('.woff') || 
+                          cleanUrl.toLowerCase().includes('.woff2') || 
+                          cleanUrl.toLowerCase().includes('.aac') || 
+                          cleanUrl.toLowerCase().includes('.mp3') ||
+                          cleanUrl.toLowerCase().includes('.png') ||
+                          cleanUrl.toLowerCase().includes('.jpg') ||
+                          cleanUrl.toLowerCase().includes('.jpeg') ||
+                          cleanUrl.toLowerCase().includes('.key');
 
-    if (!isM3u8Url) {
+    if (isSegmentFile) {
       // Direct binary streaming bypass to prevent memory bloating / Out Of Memory
       try {
         const response = await axios({
