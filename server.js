@@ -170,28 +170,6 @@ app.use((req, res, next) => {
 const streamCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 
-async function getValidCachedStream(key) {
-  const cached = streamCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.time >= CACHE_TTL) {
-    streamCache.delete(key);
-    return null;
-  }
-  try {
-    const checkRes = await axios.get(cached.url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': cached.ref || 'https://vidnest.fun/' },
-      timeout: 1800,
-      validateStatus: (s) => s >= 200 && s < 400
-    });
-    if (checkRes && checkRes.status >= 200 && checkRes.status < 400) {
-      return cached;
-    }
-  } catch (e) {}
-  
-  streamCache.delete(key);
-  return null;
-}
-
 // সমসাময়িক রিকোয়েস্ট লকার (একই টাইটেলে মাল্টিপল ব্রাউজার ওপেন বন্ধ রাখার জন্য)
 const pendingScrapes = new Map();
 
@@ -518,10 +496,10 @@ async function getWebProviderUrls(params) {
     `${vidnestBase}?server=sigma`,
     `${vidnestBase}?server=delta`,
     vidnestBase,
-    vidsrcSbsUrl,
-    vidsrcXyzUrl,
+    autoembedUrl,
     vidrockUrl,
-    autoembedUrl
+    vidsrcSbsUrl,
+    vidsrcXyzUrl
   ];
   for (const cUrl of clusterPool) {
     if (!regularUrls.includes(cUrl)) {
@@ -615,7 +593,6 @@ async function fastScrape(browser, targetUrl, sharedState) {
         return;
       }
       const u = response.url();
-      const status = response.status();
       const isMedia = u.includes('.m3u8') || u.includes('/hls/') || (u.includes('.mp4') && !u.includes('google'));
       const isFake = u.includes('demo-video.mp4') || u.includes('demo.mp4') || u.includes('trailer');
 
@@ -694,61 +671,30 @@ async function raceScrapeUrls(browser, urls) {
   
   const sharedState = { resolved: false, pages: [] };
   
-  // Try the top 3 URLs in parallel concurrently right from the start
-  const targetUrls = urls.slice(0, 3);
-  const promises = targetUrls.map(async (url) => {
-    try {
-      const streamUrl = await fastScrape(browser, url, sharedState);
-      if (streamUrl) {
-        return { url: streamUrl, ref: url };
-      }
-    } catch (e) {}
-    return null;
-  });
-  
-  const initialRes = await new Promise((resolve) => {
-    let completed = 0;
-    let finished = false;
-    
-    promises.forEach(async (p) => {
-      const res = await p;
-      if (res && res.url && !finished) {
-        finished = true;
-        resolve(res);
-      } else {
-        completed++;
-        if (completed === promises.length && !finished) {
-          finished = true;
-          resolve(null);
+  // Stage 1: Try the first URL (usually Vidnest or direct high-speed provider)
+  try {
+    const firstUrl = urls[0];
+    const streamUrl = await fastScrape(browser, firstUrl, sharedState);
+    if (streamUrl) {
+      // Clean up others just in case
+      sharedState.resolved = true;
+      if (sharedState.pages) {
+        for (const p of sharedState.pages) {
+          try { await p.close().catch(() => {}); } catch(err){}
         }
       }
-    });
-
-    // Timeout of 7 seconds for the first parallel stage
-    setTimeout(() => {
-      if (!finished) {
-        finished = true;
-        resolve(null);
-      }
-    }, 7000);
-  });
-
-  if (initialRes) {
-    sharedState.resolved = true;
-    if (sharedState.pages) {
-      for (const p of sharedState.pages) {
-        try { await p.close().catch(() => {}); } catch(err){}
-      }
+      return { url: streamUrl, ref: firstUrl };
     }
-    return initialRes;
+  } catch (e) {
+    console.error("Stage 1 race error:", e);
   }
-
+  
   if (sharedState.resolved) return null;
-
-  // Fallback Stage: Try remaining URLs in parallel
-  const remainingUrls = urls.slice(3);
-  if (remainingUrls.length > 0) {
-    const promises = remainingUrls.map(async (url) => {
+  
+  // Stage 2: Try the next 2 URLs in parallel (safe for memory & CPU)
+  const nextUrls = urls.slice(1, 3);
+  if (nextUrls.length > 0) {
+    const promises = nextUrls.map(async (url) => {
       try {
         const streamUrl = await fastScrape(browser, url, sharedState);
         if (streamUrl) {
@@ -758,7 +704,7 @@ async function raceScrapeUrls(browser, urls) {
       return null;
     });
     
-    const fallbackRes = await new Promise((resolve) => {
+    const stage2Res = await new Promise((resolve) => {
       let completed = 0;
       let finished = false;
       promises.forEach(async (p) => {
@@ -782,17 +728,67 @@ async function raceScrapeUrls(browser, urls) {
       }, 7000);
     });
     
-    if (fallbackRes) {
+    if (stage2Res) {
       sharedState.resolved = true;
       if (sharedState.pages) {
         for (const p of sharedState.pages) {
           try { await p.close().catch(() => {}); } catch(err){}
         }
       }
-      return fallbackRes;
+      return stage2Res;
     }
   }
-
+  
+  if (sharedState.resolved) return null;
+  
+  // Stage 3: Try remaining URLs in parallel as fallback
+  const remainingUrls = urls.slice(3);
+  if (remainingUrls.length > 0) {
+    const promises = remainingUrls.map(async (url) => {
+      try {
+        const streamUrl = await fastScrape(browser, url, sharedState);
+        if (streamUrl) {
+          return { url: streamUrl, ref: url };
+        }
+      } catch (e) {}
+      return null;
+    });
+    
+    const stage3Res = await new Promise((resolve) => {
+      let completed = 0;
+      let finished = false;
+      promises.forEach(async (p) => {
+        const res = await p;
+        if (res && res.url && !finished) {
+          finished = true;
+          resolve(res);
+        } else {
+          completed++;
+          if (completed === promises.length && !finished) {
+            finished = true;
+            resolve(null);
+          }
+        }
+      });
+      setTimeout(() => {
+        if (!finished) {
+          finished = true;
+          resolve(null);
+        }
+      }, 7000);
+    });
+    
+    if (stage3Res) {
+      sharedState.resolved = true;
+      if (sharedState.pages) {
+        for (const p of sharedState.pages) {
+          try { await p.close().catch(() => {}); } catch(err){}
+        }
+      }
+      return stage3Res;
+    }
+  }
+  
   // Final safety cleanup of any stray pages
   sharedState.resolved = true;
   if (sharedState.pages) {
@@ -897,7 +893,7 @@ function parseParams(query) {
 }
 
 // ========================================================
-// 🔐 VIDNEST DIRECT API DECRYPTION & FETCH LOGIC
+// 🔐 HINDI SERVER (DELTA) CIPHER DECRYPTION & FETCH LOGIC
 // ========================================================
 const CUSTOM_CIPHER_ALPHABET = "RB0fpH8ZEyVLkv7c2i6MAJ5u3IKFDxlS1NTsnGaqmXYdUrtzjwObCgQP94hoeW+/=";
 const STD_BASE64_ALPHABET    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
@@ -931,211 +927,89 @@ function decodeCustomCipher(encryptedPayload) {
   }
 }
 
-async function fetchVidnestDirectStream(params, serverSlug) {
+async function fetchHindiVidnestDeltaStream(params) {
   const { id, isTv, season, episode } = params;
   const numericTmdbId = String(id).replace('tt', '');
   
   const nodeHosts = [
+    'https://vidnest.fun',
     'https://new.vidnest.fun',
-    'https://vidnest.fun'
+    'https://api.vidnes.fun',
+    'https://vidnes.fun',
+    'https://new.vidnes.fun'
   ];
 
-  let srv = serverSlug;
-  if (srv === 'hindi') srv = 'delta';
-
-  // Always attempt to resolve AniList ID by title to see if this is an Anime (bypassing TMDB TV label constraints)
-  let anilistId = params.anilistId;
-  if (!anilistId && params.title) {
-    try {
-      const ext = await getAnimeExternalIds(params.title);
-      anilistId = ext?.anilistId;
-    } catch (e) {}
-  }
-
-  const subPaths = [];
-
-  if (anilistId) {
-    const ep = isTv ? episode : 1;
-    subPaths.push(
-      `/anime/${anilistId}/${ep}/sub?server=${srv}`,
-      `/anime/${anilistId}/${ep}/dub?server=${srv}`,
-      `/anime/${anilistId}/${ep}/sub`,
-      `/anime/${anilistId}/${ep}/dub`
-    );
-  }
-
-  // Include modern VidNest API provider paths (yflix, videasy, rogflix, vidzee, allmovies)
-  if (isTv) {
-    subPaths.push(
-      `/yflix/tv/${numericTmdbId}/${season}/${episode}`,
-      `/videasy/tv/${numericTmdbId}/${season}/${episode}`,
-      `/rogflix/tv/${numericTmdbId}/${season}/${episode}`,
-      `/vidzee/tv/${numericTmdbId}/${season}/${episode}`,
-      `/allmovies/tv/${numericTmdbId}/${season}/${episode}`,
-      `/tv/${numericTmdbId}/${season}/${episode}`
-    );
-  } else {
-    subPaths.push(
-      `/yflix/movie/${numericTmdbId}`,
-      `/videasy/movie/${numericTmdbId}`,
-      `/rogflix/movie/${numericTmdbId}`,
-      `/vidzee/movie/${numericTmdbId}`,
-      `/allmovies/movie/${numericTmdbId}`,
-      `/movie/${numericTmdbId}`
-    );
-  }
-
-  const globalController = new AbortController();
-  const globalSignal = globalController.signal;
-  const fetchPromises = [];
-
-  // Set safety timeout of 4 seconds for the entire parallel race
-  const globalTimeoutId = setTimeout(() => {
-    globalController.abort();
-  }, 4000);
+  const subPaths = isTv 
+    ? [`/allmovies/tv/${numericTmdbId}/${season}/${episode}`, `/tv/${numericTmdbId}/${season}/${episode}?server=delta`]
+    : [`/allmovies/movie/${numericTmdbId}`, `/movie/${numericTmdbId}?server=delta`];
 
   for (const host of nodeHosts) {
     for (const path of subPaths) {
       const url = `${host}${path}`;
-      
-      const fetchPromise = (async () => {
-        const localController = new AbortController();
-        const localSignal = localController.signal;
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://vidnest.fun/',
+            'Origin': 'https://vidnest.fun',
+            'Accept': 'application/json, text/plain, */*'
+          },
+          signal: AbortSignal.timeout(3000)
+        });
 
-        // Abort this specific fetch if it takes more than 2500ms
-        const localTimeoutId = setTimeout(() => {
-          localController.abort();
-        }, 2500);
+        if (!response.ok) continue;
 
-        // We abort if EITHER the local timeout fires OR the global abort is triggered (by success of another fetch)
-        const onGlobalAbort = () => {
-          localController.abort();
-        };
-        globalSignal.addEventListener('abort', onGlobalAbort);
+        const contentType = response.headers.get('content-type') || '';
+        let payload = null;
 
-        try {
-          const response = await fetch(url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              'Referer': 'https://vidnest.fun/',
-              'Origin': 'https://vidnest.fun',
-              'Accept': 'application/json, text/plain, */*'
-            },
-            signal: localSignal
-          });
-
-          clearTimeout(localTimeoutId);
-          globalSignal.removeEventListener('abort', onGlobalAbort);
-
-          if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+        if (contentType.includes('json')) {
+          payload = await response.json();
+        } else {
+          const text = await response.text();
+          try {
+            payload = JSON.parse(text);
+          } catch (e) {
+            payload = text.trim();
           }
-
-          const contentType = response.headers.get('content-type') || '';
-          let payload = null;
-
-          if (contentType.includes('json')) {
-            payload = await response.json();
-          } else {
-            const text = await response.text();
-            try {
-              payload = JSON.parse(text);
-            } catch (e) {
-              payload = text.trim();
-            }
-          }
-
-          let data = payload;
-          if (typeof payload === 'string' && payload.length > 20) {
-            data = decodeCustomCipher(payload);
-          } else if (payload && payload.ciphertext) {
-            data = decodeCustomCipher(payload.ciphertext);
-          } else if (payload && payload.data && typeof payload.data === 'string') {
-            data = decodeCustomCipher(payload.data);
-          }
-
-          if (data) {
-            let streamUrl = null;
-            let customHeaders = null;
-            let streamRef = 'https://vidnest.fun/';
-
-            if (data.headers) {
-              customHeaders = data.headers;
-              if (data.headers.Referer || data.headers.referer) {
-                streamRef = data.headers.Referer || data.headers.referer;
-              }
-            }
-
-            if (typeof data === 'string') {
-              streamUrl = data;
-            } else if (data.streams && Array.isArray(data.streams)) {
-              const first = data.streams.find(s => s.file || s.url || s.link) || data.streams[0];
-              streamUrl = first?.file || first?.url || first?.link;
-              if (first?.headers) customHeaders = { ...(customHeaders || {}), ...first.headers };
-            } else if (data.sources && Array.isArray(data.sources)) {
-              const first = data.sources.find(s => s.file || s.url || s.link) || data.sources[0];
-              streamUrl = first?.file || first?.url || first?.link;
-              if (first?.headers) customHeaders = { ...(customHeaders || {}), ...first.headers };
-            } else if (data.url || data.file || data.stream) {
-              streamUrl = data.url || data.file || data.stream;
-            }
-
-            const isStream = streamUrl && (
-              streamUrl.includes('.m3u8') || 
-              streamUrl.includes('.mp4') || 
-              streamUrl.includes('/hls/') || 
-              streamUrl.includes('master')
-            );
-
-            if (isStream) {
-              globalController.abort();
-              return {
-                url: streamUrl,
-                ref: streamRef,
-                headers: customHeaders
-              };
-            }
-          }
-          throw new Error('Valid stream not found');
-        } catch (err) {
-          clearTimeout(localTimeoutId);
-          globalSignal.removeEventListener('abort', onGlobalAbort);
-          throw err;
         }
-      })();
 
-      fetchPromises.push(fetchPromise);
+        let data = payload;
+        if (typeof payload === 'string' && payload.length > 20) {
+          data = decodeCustomCipher(payload);
+        } else if (payload && payload.ciphertext) {
+          data = decodeCustomCipher(payload.ciphertext);
+        } else if (payload && payload.data && typeof payload.data === 'string') {
+          data = decodeCustomCipher(payload.data);
+        }
+
+        if (data) {
+          let streamUrl = null;
+          if (typeof data === 'string' && (data.includes('.m3u8') || data.includes('.mp4'))) {
+            streamUrl = data;
+          } else if (data.streams && Array.isArray(data.streams)) {
+            const first = data.streams.find(s => s.file || s.url || s.link) || data.streams[0];
+            streamUrl = first?.file || first?.url || first?.link;
+          } else if (data.sources && Array.isArray(data.sources)) {
+            const first = data.sources.find(s => s.file || s.url || s.link) || data.sources[0];
+            streamUrl = first?.file || first?.url || first?.link;
+          } else if (data.url || data.file || data.stream) {
+            streamUrl = data.url || data.file || data.stream;
+          }
+
+          if (streamUrl && (streamUrl.includes('.m3u8') || streamUrl.includes('.mp4') || streamUrl.includes('/hls/'))) {
+            return {
+              url: streamUrl,
+              ref: 'https://vidnest.fun/'
+            };
+          }
+        }
+      } catch (err) {
+        // Try next node
+      }
     }
   }
 
-  try {
-    const result = await anySuccessfulPromise(fetchPromises);
-    clearTimeout(globalTimeoutId);
-    return result;
-  } catch (err) {
-    clearTimeout(globalTimeoutId);
-    return null;
-  }
-}
-
-// Helper to wait for the first resolving promise, ignoring rejections, unless all reject
-function anySuccessfulPromise(promises) {
-  return new Promise((resolve, reject) => {
-    let rejectionCount = 0;
-    const errors = [];
-    if (promises.length === 0) {
-      return reject(new Error('No promises provided'));
-    }
-    promises.forEach((p) => {
-      p.then(resolve).catch((err) => {
-        rejectionCount++;
-        errors.push(err);
-        if (rejectionCount === promises.length) {
-          reject(new Error('All promises were rejected'));
-        }
-      });
-    });
-  });
+  return null;
 }
 
 // ========================================================
@@ -1165,13 +1039,11 @@ async function handleResolveStream(req, res) {
 
   const serverSlug = params.server || 'flixer';
   const cacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}_${serverSlug}`;
-  const generalCacheKey = `${params.id}_${params.typeStr}_${params.season}_${params.episode}`;
 
   // Check cache ONLY for this specific server slug to prevent language/server cross-contamination
   const cached = streamCache.get(cacheKey);
   if (cached && Date.now() - cached.time < CACHE_TTL) {
-    const headersParam = cached.headers ? `&headers=${encodeURIComponent(JSON.stringify(cached.headers))}` : '';
-    const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}${headersParam}`;
+    const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(cached.url)}&referer=${encodeURIComponent(cached.ref)}`;
     return res.json({
       success: true,
       isEmbed: false,
@@ -1190,8 +1062,7 @@ async function handleResolveStream(req, res) {
     try {
       const result = await pendingScrapes.get(cacheKey);
       if (result) {
-        const headersParam = result.headers ? `&headers=${encodeURIComponent(JSON.stringify(result.headers))}` : '';
-        const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}${headersParam}`;
+        const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.ref)}`;
         return res.json({
           success: true,
           isEmbed: false,
@@ -1208,23 +1079,21 @@ async function handleResolveStream(req, res) {
     } catch (e) {}
   }
 
-  // ⚡ Fast direct API check for VidNest custom cipher API (flixer, hindi, lambda, gamma, sigma, delta)
-  const vidnestServers = ['flixer', 'hindi', 'lambda', 'gamma', 'sigma', 'delta'];
-  if (vidnestServers.includes(serverSlug)) {
+  // ⚡ Fast direct API check for Hindi (VidNest Delta) custom cipher API
+  if (serverSlug === 'hindi' || serverSlug === 'delta') {
     try {
-      const directStream = await fetchVidnestDirectStream(params, serverSlug);
-      if (directStream && directStream.url) {
-        const data = { url: directStream.url, ref: directStream.ref, headers: directStream.headers, time: Date.now() };
+      const directHindi = await fetchHindiVidnestDeltaStream(params);
+      if (directHindi && directHindi.url) {
+        const data = { url: directHindi.url, ref: directHindi.ref, time: Date.now() };
         streamCache.set(cacheKey, data);
-        const headersParam = directStream.headers ? `&headers=${encodeURIComponent(JSON.stringify(directStream.headers))}` : '';
-        const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(directStream.url)}&referer=${encodeURIComponent(directStream.ref)}${headersParam}`;
+        const streamProxyUrl = `${hostUrl}/api/stream-proxy?url=${encodeURIComponent(directHindi.url)}&referer=${encodeURIComponent(directHindi.ref)}`;
         return res.json({
           success: true,
           isEmbed: false,
           streamUrl: streamProxyUrl,
-          rawUrl: directStream.url,
+          rawUrl: directHindi.url,
           proxy_stream_url: streamProxyUrl,
-          stream_url: directStream.url,
+          stream_url: directHindi.url,
           expoStreamUrl: streamProxyUrl,
           vlcStreamUrl: streamProxyUrl,
           server: serverSlug,
@@ -1232,8 +1101,24 @@ async function handleResolveStream(req, res) {
         });
       }
     } catch (err) {
-      console.error(`Direct VidNest ${serverSlug} API fetch error:`, err);
+      console.error("Direct Hindi Delta API fetch error:", err);
     }
+
+    // High-speed fallback: Return VidNest Delta embedded player URL so iframe loads VidNest Delta instantly
+    const deltaEmbedUrl = params.isTv 
+      ? `https://vidnest.fun/tv/${params.id}/${params.season}/${params.episode}?server=delta`
+      : `https://vidnest.fun/movie/${params.id}?server=delta`;
+
+    return res.json({
+      success: true,
+      isEmbed: true,
+      streamUrl: deltaEmbedUrl,
+      rawUrl: deltaEmbedUrl,
+      expoStreamUrl: deltaEmbedUrl,
+      vlcStreamUrl: deltaEmbedUrl,
+      server: serverSlug,
+      type: params.typeStr
+    });
   }
 
   // ⚡ Dedicated VidSrc SBS Server Handler
@@ -1334,18 +1219,11 @@ async function handleResolveStream(req, res) {
     });
   }
 
-  // Direct server-side fallback to VidSrc.SBS instead of player.autoembed.cc to avoid failing
-  const sbsEmbedUrl = params.isTv 
-    ? `https://vidsrc.sbs/embed/tv/${params.id}/${params.season}/${params.episode}`
-    : `https://vidsrc.sbs/embed/movie/${params.id}`;
-
-  return res.json({
-    success: true,
-    isEmbed: true,
-    streamUrl: sbsEmbedUrl,
-    rawUrl: sbsEmbedUrl,
-    expoStreamUrl: sbsEmbedUrl,
-    vlcStreamUrl: sbsEmbedUrl,
+  // If no stream could be captured directly from this cluster, return informative direct stream proxy
+  return res.status(404).json({
+    success: false,
+    isEmbed: false,
+    error: 'Stream could not be scraped from this mirror. Please switch to another server (e.g. Flixer, Lambda, or Gamma).',
     server: serverSlug,
     type: params.typeStr,
     debugInfo: activeDebugInfo
@@ -1554,7 +1432,7 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       }
     }
 
-    const headersParamStr = (parsedHeaders && Object.keys(parsedHeaders).length > 0) ? JSON.stringify(parsedHeaders) : '';
+    const headersParamStr = parsedHeaders ? JSON.stringify(parsedHeaders) : '';
     const headersQuery = headersParamStr ? `&headers=${encodeURIComponent(headersParamStr)}` : '';
 
     // Prepare case-insensitive request headers
@@ -1608,19 +1486,9 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
       return res.send(htmlPlayer);
     }
 
-    const isSegmentFile = cleanUrl.toLowerCase().includes('.ts') || 
-                          cleanUrl.toLowerCase().includes('.mp4') || 
-                          cleanUrl.toLowerCase().includes('.m4s') || 
-                          cleanUrl.toLowerCase().includes('.woff') || 
-                          cleanUrl.toLowerCase().includes('.woff2') || 
-                          cleanUrl.toLowerCase().includes('.aac') || 
-                          cleanUrl.toLowerCase().includes('.mp3') ||
-                          cleanUrl.toLowerCase().includes('.png') ||
-                          cleanUrl.toLowerCase().includes('.jpg') ||
-                          cleanUrl.toLowerCase().includes('.jpeg') ||
-                          cleanUrl.toLowerCase().includes('.key');
+    const isM3u8Url = cleanUrl.toLowerCase().includes('.m3u8') || cleanUrl.toLowerCase().includes('playlist');
 
-    if (isSegmentFile) {
+    if (!isM3u8Url) {
       // Direct binary streaming bypass to prevent memory bloating / Out Of Memory
       try {
         const response = await axios({
@@ -1632,13 +1500,8 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         });
 
         let contentType = response.headers['content-type'] || 'video/mp2t';
-        const urlLower = cleanUrl.toLowerCase();
-        if (urlLower.includes('.woff') || urlLower.includes('.css') || urlLower.includes('.ts') || urlLower.includes('seg-') || urlLower.includes('.key')) {
-          contentType = 'video/mp2t';
-        } else if (urlLower.includes('.m4s') || urlLower.includes('.mp4')) {
-          contentType = 'video/mp4';
-        } else if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream') || contentType.includes('font')) {
-          contentType = urlLower.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
+        if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
+          contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
         }
 
         res.set({
@@ -1677,46 +1540,28 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     const isM3u8 = textPreview.includes('#EXTM3U') || textPreview.includes('#EXT-X-');
 
     if (isM3u8) {
-      const utf8Text = buffer.toString('utf8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const utf8Text = buffer.toString('utf8');
       const lines = utf8Text.split('\n');
-      const cleanHeadersQuery = (headersParamStr && headersParamStr !== '{}') ? `&headers=${encodeURIComponent(headersParamStr)}` : '';
 
-      const rewrittenLines = [];
-      for (const rawLine of lines) {
-        const trimmed = rawLine.trim();
-        if (!trimmed) continue;
+      const rewritten = lines.map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return line;
 
+        // AES-128 কী এবং সাব-প্লেলিস্ট টোকেন হ্যান্ডলার
         if (trimmed.startsWith('#')) {
-          let modifiedTagLine = trimmed;
-          if (modifiedTagLine.includes('URI="')) {
-            modifiedTagLine = modifiedTagLine.replace(/URI="([^"]+)"/g, (match, p1) => {
+          if (trimmed.includes('URI="')) {
+            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
               const absKey = resolveChunkWithToken(p1, targetUrlObj);
-              return `URI="${proxyBase}?url=${encodeURIComponent(absKey)}&referer=${encodeURIComponent(ref)}${cleanHeadersQuery}"`;
+              return `URI="${proxyBase}?url=${encodeURIComponent(absKey)}&referer=${encodeURIComponent(ref)}${headersQuery}"`;
             });
           }
-
-          // Check if tag contains an inline URL, e.g. #EXTINF:4.000,https://domain.com/seg.ts
-          const extinfMatch = modifiedTagLine.match(/^(#EXTINF:[^,]+,)(https?:\/\/\S+|\S+)$/i);
-          if (extinfMatch) {
-            const tagPrefix = extinfMatch[1];
-            const inlineUrl = extinfMatch[2];
-            if (inlineUrl.includes('/') || inlineUrl.includes('.')) {
-              const absChunk = resolveChunkWithToken(inlineUrl, targetUrlObj);
-              rewrittenLines.push(tagPrefix);
-              rewrittenLines.push(`${proxyBase}?url=${encodeURIComponent(absChunk)}&referer=${encodeURIComponent(ref)}${cleanHeadersQuery}`);
-              continue;
-            }
-          }
-
-          rewrittenLines.push(modifiedTagLine);
-        } else {
-          // Direct segment or sub-playlist URL line
-          const absChunk = resolveChunkWithToken(trimmed, targetUrlObj);
-          rewrittenLines.push(`${proxyBase}?url=${encodeURIComponent(absChunk)}&referer=${encodeURIComponent(ref)}${cleanHeadersQuery}`);
+          return line;
         }
-      }
 
-      const rewritten = rewrittenLines.join('\n');
+        // সেগমেন্ট লিঙ্ক রিরাইটিং ও টোকেন ধরে রাখা
+        const absChunk = resolveChunkWithToken(trimmed, targetUrlObj);
+        return `${proxyBase}?url=${encodeURIComponent(absChunk)}&referer=${encodeURIComponent(ref)}${headersQuery}`;
+      }).join('\n');
 
       res.set({
         'Content-Type': 'application/vnd.apple.mpegurl',
@@ -1728,13 +1573,8 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     }
 
     let contentType = response.headers['content-type'] || 'video/mp2t';
-    const urlLowerFallback = cleanUrl.toLowerCase();
-    if (urlLowerFallback.includes('.woff') || urlLowerFallback.includes('.css') || urlLowerFallback.includes('.ts') || urlLowerFallback.includes('seg-') || urlLowerFallback.includes('.key')) {
-      contentType = 'video/mp2t';
-    } else if (urlLowerFallback.includes('.m4s') || urlLowerFallback.includes('.mp4')) {
-      contentType = 'video/mp4';
-    } else if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream') || contentType.includes('font')) {
-      contentType = urlLowerFallback.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
+    if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
+      contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
     }
 
     res.set({
@@ -1746,11 +1586,6 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
 
     return res.send(buffer);
   } catch (error) {
-    for (const [key, val] of streamCache.entries()) {
-      if (val && val.url === cleanUrl) {
-        streamCache.delete(key);
-      }
-    }
     res.status(502).send('Stream Tunnel Gateway Error: ' + error.message);
   }
 }
