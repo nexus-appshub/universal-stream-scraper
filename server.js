@@ -1632,8 +1632,13 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
         });
 
         let contentType = response.headers['content-type'] || 'video/mp2t';
-        if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
-          contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
+        const urlLower = cleanUrl.toLowerCase();
+        if (urlLower.includes('.woff') || urlLower.includes('.css') || urlLower.includes('.ts') || urlLower.includes('seg-') || urlLower.includes('.key')) {
+          contentType = 'video/mp2t';
+        } else if (urlLower.includes('.m4s') || urlLower.includes('.mp4')) {
+          contentType = 'video/mp4';
+        } else if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream') || contentType.includes('font')) {
+          contentType = urlLower.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
         }
 
         res.set({
@@ -1723,8 +1728,13 @@ async function pipeMediaTunnel(req, res, targetUrl, referer) {
     }
 
     let contentType = response.headers['content-type'] || 'video/mp2t';
-    if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream')) {
-      contentType = cleanUrl.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
+    const urlLowerFallback = cleanUrl.toLowerCase();
+    if (urlLowerFallback.includes('.woff') || urlLowerFallback.includes('.css') || urlLowerFallback.includes('.ts') || urlLowerFallback.includes('seg-') || urlLowerFallback.includes('.key')) {
+      contentType = 'video/mp2t';
+    } else if (urlLowerFallback.includes('.m4s') || urlLowerFallback.includes('.mp4')) {
+      contentType = 'video/mp4';
+    } else if (contentType.includes('image') || contentType.includes('text/html') || contentType.includes('octet-stream') || contentType.includes('font')) {
+      contentType = urlLowerFallback.includes('.mp4') ? 'video/mp4' : 'video/mp2t';
     }
 
     res.set({
